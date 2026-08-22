@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Fancy Text → SVG</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="lib/opentype.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Fancy Text → SVG</h1>
+    <p class="sub">Browser-rendered fancy text → embroidery-ready SVG (Ink/Stitch tuned).</p>
+  </header>
+
+  <main>
+    <section class="controls">
+      <label>
+        <span>Text</span>
+        <textarea id="text" rows="3" spellcheck="false">yearn in hell, bitch.</textarea>
+      </label>
+
+      <label>
+        <span>Font</span>
+        <select id="font"></select>
+      </label>
+
+      <label>
+        <span>Size (units)</span>
+        <input id="size" type="number" value="80" min="8" max="400" step="1" />
+      </label>
+
+      <fieldset>
+        <legend>Fill thread</legend>
+        <label>
+          <span>Preset</span>
+          <select id="color-preset">
+            <option value="">— pick a thread —</option>
+          </select>
+        </label>
+        <label>
+          <span>Hex</span>
+          <input id="color-hex" type="text" value="#FFF859" />
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Unicode substitution (text-only sidebar)</legend>
+        <label>
+          <span>Style</span>
+          <select id="unicode-style">
+            <option value="">none</option>
+            <option value="bold">bold</option>
+            <option value="italic">italic</option>
+            <option value="bolditalic">bold italic</option>
+            <option value="script">script</option>
+            <option value="boldscript">bold script</option>
+            <option value="fraktur">fraktur</option>
+            <option value="doublestruck">double-struck</option>
+            <option value="monospace">monospace</option>
+            <option value="sansbold">sans bold</option>
+            <option value="sansitalic">sans italic</option>
+          </select>
+        </label>
+        <label>
+          <span>Output</span>
+          <textarea id="unicode-output" rows="2" readonly></textarea>
+        </label>
+        <button id="copy-unicode" type="button">Copy unicode</button>
+        <p class="hint">Substitution is applied before SVG rendering — the chosen font draws the substituted glyphs (use a Unicode-coverage-aware font, or copy the text out for use elsewhere).</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Effects</legend>
+
+        <div class="effect">
+          <label class="row"><input id="outline-on" type="checkbox" /> Outline (satin column)</label>
+          <label><span>Width</span><input id="outline-width" type="number" value="4" min="1" step="0.5" /></label>
+          <label><span>Hex</span><input id="outline-hex" type="text" value="#000000" /></label>
+        </div>
+
+        <div class="effect">
+          <label class="row"><input id="shadow-on" type="checkbox" /> Drop shadow (extra fill, sewn first)</label>
+          <label><span>dx</span><input id="shadow-dx" type="number" value="3" step="0.5" /></label>
+          <label><span>dy</span><input id="shadow-dy" type="number" value="3" step="0.5" /></label>
+          <label><span>Hex</span><input id="shadow-hex" type="text" value="#000000" /></label>
+        </div>
+
+        <div class="effect">
+          <label class="row"><input id="arch-on" type="checkbox" /> Arch (single line only)</label>
+          <label><span>Curvature</span><input id="arch-curvature" type="range" value="0.4" min="-1" max="1" step="0.05" /></label>
+        </div>
+
+        <div class="effect">
+          <label class="row"><input id="gradient-on" type="checkbox" /> Gradient <em>(preview-only)</em></label>
+          <label><span>From</span><input id="gradient-from" type="text" value="#FFF859" /></label>
+          <label><span>To</span><input id="gradient-to" type="text" value="#C41820" /></label>
+        </div>
+      </fieldset>
+
+      <p id="note" class="note"></p>
+      <button id="download" type="button" class="primary">Download SVG</button>
+    </section>
+
+    <section class="output">
+      <div id="preview"></div>
+      <details>
+        <summary>SVG source</summary>
+        <textarea id="svg-source" rows="14" readonly></textarea>
+      </details>
+    </section>
+  </main>
+
+  <footer>
+    <p>
+      Output uses the <code>hat-twill-yellow-on-black</code> preset defaults (row spacing 0.40 mm, max stitch 3.00 mm, pull comp 0.20 mm) — adjust later if targeting a different fabric.
+      Drop the file into <code>designs/</code> and run <code>stitch from-svg</code>.
+    </p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

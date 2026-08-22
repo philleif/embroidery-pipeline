@@ -1,0 +1,83 @@
+# A preset composes one fabric + one needle + one or more threads
+# (in stitching order) with the digitization parameters tuned for that combo.
+# Reference these by name from the CLI: `stitch from-svg foo.svg --preset hat-twill-yellow-on-black`
+
+[[preset]]
+name = "hat-twill-yellow-on-black"
+fabric = "twill-hat-front"
+needle = "schmetz-embroidery-75-11"
+threads = ["madeira-classic-40-1147"]
+row_spacing_mm = 0.4              # 40wt rayon on stable woven; matches the pro reference pitch
+max_stitch_length_mm = 3.0
+satin_underlay = "center-walk+zigzag"
+fill_underlay = "edge-walk"
+notes = "Classic OHHI hat patch: yellow wordmark/heart on black twill cap front."
+
+[[preset]]
+name = "tee-jersey-black-on-natural"
+fabric = "cotton-jersey-tee"
+needle = "schmetz-embroidery-75-11"
+threads = ["madeira-classic-40-1023"]
+row_spacing_mm = 0.45             # looser fill on stretchy fabric to avoid tunneling
+max_stitch_length_mm = 3.5
+satin_underlay = "center-walk+zigzag"
+fill_underlay = "edge-walk+zigzag"
+notes = "Natural cotton tee, black wordmark. Pull comp is set in the fabric profile."
+
+[[preset]]
+name = "felt-patch-multicolor"
+fabric = "felt-patch-blank"
+needle = "schmetz-embroidery-75-11"
+threads = [
+    "madeira-classic-40-1023",         # color block 1: black outline
+    "madeira-classic-40-1147",         # color block 2: yellow fill
+]
+row_spacing_mm = 0.4
+max_stitch_length_mm = 3.0
+satin_underlay = "center-walk+zigzag"
+fill_underlay = "edge-walk"
+notes = "Two-color felt patch. The PE900 will pause between colors; load thread #2 when prompted."
+
+[[preset]]
+name = "canvas-yellow-small-text"
+fabric = "canvas"
+needle = "schmetz-embroidery-90-14"
+threads = ["madeira-classic-40-1147"]
+row_spacing_mm = 0.3              # denser than the classic 0.4 — small glyphs need solid coverage
+max_stitch_length_mm = 1.8       # short stitches so tight subscript curves don't get faceted
+satin_underlay = "center-walk+zigzag"
+fill_underlay = "edge-walk"
+notes = "Small/dense lettering on heavy cotton canvas — e.g. the subscript 'yearn in hell' text. Sharp 90/14 needle pierces the firm weave; dense 0.3mm fill is safe because stable canvas doesn't tunnel."
+
+[[preset]]
+name = "hat-twill-black-detail"
+fabric = "twill-hat-front"
+needle = "schmetz-embroidery-90-14"
+threads = ["madeira-classic-40-1023"]
+row_spacing_mm = 0.3              # dense fill for fine detail — structured twill is stable, won't tunnel
+max_stitch_length_mm = 2.0       # short enough to keep small glyph curves smooth, sane count on big letters
+satin_underlay = "center-walk+zigzag"
+fill_underlay = "edge-walk"
+notes = "Black wordmark with fine detail on a structured twill cap front — e.g. the DESPERATE LOSERS logo with its small phone-number line. Black 40wt rayon, sharp 90/14 needle for the firm weave, 0.3mm fill so the ~0.75mm phone-number strokes hold solid coverage."
+
+[[preset]]
+name = "hat-twill-badge-fill"
+fabric = "twill-hat-front"
+needle = "schmetz-embroidery-90-14"
+threads = ["madeira-classic-40-1023"]
+row_spacing_mm = 0.4              # solid-mass profile: 0.3 packs an 18cm2 fill to ~170 st/cm2, above the pro band and stiff enough to board a cap front
+max_stitch_length_mm = 3.0       # long rows across a 50mm disc; no small glyph curves to facet
+satin_underlay = "center-walk+zigzag"
+fill_underlay = "edge-walk"
+notes = "Large solid fill / knockout badge on a structured twill cap front — e.g. the PTM stamp disc, where the thread IS the shape and the letters are bare fabric. Same fabric/needle/thread as hat-twill-black-detail, but the fine-detail 0.3mm density is wrong for a big mass: use 0.4mm rows so the patch stays flexible and lands mid-band. Swap the thread for yellow/red to run it on a black cap."
+
+[[preset]]
+name = "hat-twill-red-on-black"
+fabric = "twill-hat-front"
+needle = "schmetz-embroidery-90-14"
+threads = ["madeira-classic-40-1147-red"]
+row_spacing_mm = 0.3              # same fine-detail profile as hat-twill-black-detail — spiky metal logo needs tight coverage
+max_stitch_length_mm = 2.0       # short stitches keep spike tips and serif points crisp
+satin_underlay = "center-walk+zigzag"
+fill_underlay = "edge-walk"
+notes = "Red wordmark on a black structured twill cap — e.g. the ROCKTAVIA metal logo. Same digitization as hat-twill-black-detail; only the thread differs. WARNING: madeira-classic-40-1147-red carries a PLACEHOLDER code (1147) — color-match and replace the real Madeira red code before the final color-managed deploy."

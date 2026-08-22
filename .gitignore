@@ -1,0 +1,29 @@
+# Local runtimes and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local/editor state and secrets
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+
+# Everything under out/ is generated from tracked artwork, SVGs, recipes,
+# presets, and CLI code. Keep only the directory placeholder in Git.
+out/*
+!out/.gitkeep
+
+# Historical generated design iterations and trace caches. Current SVG masters
+# and source raster artwork under designs/ remain tracked.
+designs/archive/
+*.ink.rle

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="32mm" height="18mm"
+     viewBox="0 0 32 18" data-audit-profile="fill">
+  <g data-thread="madeira-classic-40-1023">
+    <path id="black-block" style="fill:#000000;stroke:none"
+          d="M 2 2 H 14 V 16 H 2 Z"/>
+  </g>
+  <g data-thread="madeira-classic-40-1147">
+    <path id="yellow-block" style="fill:#ffff00;stroke:none"
+          d="M 18 2 H 30 V 16 H 18 Z"/>
+  </g>
+</svg>

@@ -1,0 +1,38 @@
+# Fabric specs for the targets you actually embroider on.
+# Drives stabilizer choice and pull compensation in presets.
+
+[[fabric]]
+id = "twill-hat-front"
+construction = "structured twill"
+weight_gsm = 320
+stretch = "none"
+stabilizer = "tearaway-medium"
+pull_comp_mm = 0.2
+notes = "Standard 6-panel structured cap front."
+
+[[fabric]]
+id = "cotton-jersey-tee"
+construction = "single jersey knit"
+weight_gsm = 180
+stretch = "4-way"
+stabilizer = "cutaway-medium"
+pull_comp_mm = 0.4
+notes = "Standard cotton tee. Knit moves under the needle — needs cutaway and more pull comp."
+
+[[fabric]]
+id = "felt-patch-blank"
+construction = "wool/poly felt"
+weight_gsm = 400
+stretch = "none"
+stabilizer = "none"
+pull_comp_mm = 0.0
+notes = "Pre-cut patch blanks. Felt is its own stabilizer; sew the patch then merrowed-edge it separately."
+
+[[fabric]]
+id = "canvas"
+construction = "cotton duck canvas"
+weight_gsm = 400
+stretch = "none"
+stabilizer = "tearaway-medium"
+pull_comp_mm = 0.2
+notes = "Heavy cotton duck — tote/banner weight. Stable firm woven; takes dense fill without tunneling. Pair with a sharp needle to pierce the tight weave."

@@ -1,0 +1,33 @@
+# Thread inventory — what's actually on the spool rack.
+# `id` is referenced by presets and embedded in PES color metadata.
+# Add new entries as new spools enter the studio.
+
+[[thread]]
+id = "madeira-classic-40-1023"
+brand = "Madeira"
+line = "Classic Rayon"
+code = "1023"
+hex = "#000000"
+weight = 40
+fiber = "rayon"
+notes = "Black. Workhorse outline / wordmark color."
+
+[[thread]]
+id = "madeira-classic-40-1147"
+brand = "Madeira"
+line = "Classic Rayon"
+code = "1147"
+hex = "#FFF859"
+weight = 40
+fiber = "rayon"
+notes = "OHHI primary yellow. Closest match to Sanzo Wada brand yellow #FFF859."
+
+[[thread]]
+id = "madeira-classic-40-1147-red"
+brand = "Madeira"
+line = "Classic Rayon"
+code = "1147"
+hex = "#C41820"
+weight = 40
+fiber = "rayon"
+notes = "OHHI red. Placeholder code — replace with real Madeira number after color-matching against Sanzo Wada."

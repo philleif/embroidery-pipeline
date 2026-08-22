@@ -1,0 +1,20 @@
+# Needle inventory. `size` follows the European/American notation (e.g. 75/11).
+# `point` describes the tip geometry — affects which fabrics the needle works on.
+
+[[needle]]
+id = "schmetz-embroidery-75-11"
+size = "75/11"
+point = "ballpoint-light"
+notes = "Default for knits and lightweight wovens. Brother ships these with the machine."
+
+[[needle]]
+id = "schmetz-embroidery-90-14"
+size = "90/14"
+point = "sharp"
+notes = "For denim, twill hat fronts, layered patches, anything dense."
+
+[[needle]]
+id = "schmetz-topstitch-90-14"
+size = "90/14"
+point = "topstitch-sharp"
+notes = "Larger eye for thicker / metallic threads. Use with 30wt or specialty thread."
