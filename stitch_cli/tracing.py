@@ -39,6 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import inspect
+import os
 import json
 
 import numpy as np
@@ -136,6 +137,33 @@ class TraceConfig:
                                      # counter gets cut so the counter sits
                                      # between two branches (~115°)
     counter_wrap_max_splits: int = 24  # cap on those cuts (one per pass)
+    # Corner split (outline mode). A branch that bends sharply — the apex of
+    # an A, the corners of an N, an L — is one bent column whose stitches
+    # fan around the inside corner: dozens of penetrations share one point,
+    # the outside stitches sweep through 90-180°, and the sew-out reads as
+    # choppy. Cutting the branch at the corner gives two straight columns
+    # that meet in a mitre, every stitch perpendicular to its own stroke —
+    # the pro treatment (Acre: stem sews over bowl end). 0 = off.
+    corner_split_deg: float = 0.0      # tangent turn that counts as a corner
+    corner_split_max_splits: int = 64
+    # Concave-corner split (outline mode). A bowl whose INSIDE rail has a
+    # sharp corner (the S of a condensed grotesque: two counters with
+    # angular ends) pivots its stitches on that corner even though the
+    # centerline turns smoothly, so the corner split above never fires.
+    # Find the ink's concave corners morphologically (closing with a small
+    # disc fills a wedge at every one) and cut the nearest curving branch
+    # there. Straight strokes past a concave corner are left alone: the cut
+    # needs the centerline to be turning at least this much. 0 = off.
+    concave_split_deg: float = 0.0
+    concave_split_radius_mm: float = 0.30  # closing disc; below counter width
+    # Straight strokes as rectangles (outline mode). Nearest-skeleton ink
+    # assignment hands a straight stroke the corner WEDGES where it meets its
+    # neighbours (the diagonal of an N takes both counter corners), and
+    # fill_to_satin then fans the stitches round each wedge. A straight
+    # piece is instead given a constant-width rectangle along its chord,
+    # extended to the ink edge and clipped to the ink — every stitch
+    # perpendicular to the stroke, the neighbour sews over the overlap.
+    straight_rect_cols: bool = False
     overrides_json: str | None = None  # sidecar: add_rungs/drop_rungs/force_bean
 
     def __post_init__(self):
@@ -1006,6 +1034,220 @@ class WordmarkTracer:
         ys, xs = np.nonzero(hole_lbl == best)
         return (ys.mean(), xs.mean()), float(sizes[best - 1])
 
+    def _corner_split(self, polylines):
+        """Cut every satin branch at each sharp corner along its centerline.
+
+        A corner is a turn of at least corner_split_deg between the chords
+        one stroke-width either side of a point, AND concentrated there:
+        the turn across a quarter-width window must be most of the turn
+        across the full-width window. That second test is what separates a
+        corner from a tight bowl — an R bowl of 2mm radius turns 90° over a
+        full-width window, but only a quarter of that over the short one,
+        and a bowl is exactly what a satin column follows well. Halves
+        shorter than ~1.2 widths are not cut off: the end cap of the other
+        half already covers a corner that close to a stroke end."""
+        cfg = self.cfg
+        if cfg.corner_split_deg <= 0:
+            return
+        threshold = np.radians(cfg.corner_split_deg)
+        n_cut = 0
+        for _ in range(cfg.corner_split_max_splits):
+            split_at = None
+            for k, (pts, w, method, rails, extra) in enumerate(polylines):
+                if method != "column" or not extra or "piece" not in extra:
+                    continue
+                if extra.get("direct_ring"):
+                    continue
+                piece = np.array(extra["piece"], float)
+                if len(piece) < 8:
+                    continue
+                seg = np.hypot(*(piece[1:] - piece[:-1]).T)
+                s_arc = np.concatenate([[0.0], np.cumsum(seg)])
+                w_px = max(3.0, w * self.px_per_mm)
+                long_w, short_w = w_px, max(2.0, w_px / 4.0)
+                min_half = 1.2 * w_px
+
+                def turn_at(i, win, _piece=piece, _s=s_arc):
+                    return self._piece_turn(_piece, _s, i, win)
+
+                # A hook — the stub of a stem left on the diagonal of an N
+                # where the skeleton merged stem-top into diagonal — is a
+                # hard corner with one half shorter than a stroke width.
+                # Left in, the whole column fans round it; cut off, it is a
+                # short parallel column that reads as the stem's end. So a
+                # turn of 90° or more may cut down to 0.6 widths.
+                hook_half = 0.6 * w_px
+                best_i, best_turn = None, threshold
+                for i in range(1, len(piece) - 1):
+                    half = min(s_arc[i], s_arc[-1] - s_arc[i])
+                    if half < hook_half:
+                        continue
+                    t_long = turn_at(i, long_w)
+                    if t_long < best_turn:
+                        continue
+                    if half < min_half and t_long < np.radians(90.0):
+                        continue
+                    if turn_at(i, short_w) < 0.6 * t_long:
+                        continue                # a bowl, not a corner
+                    best_i, best_turn = i, t_long
+                if best_i is not None:
+                    split_at = (k, best_i, best_turn)
+                    break
+            if split_at is None:
+                break
+            k, m, turn = split_at
+            self._cut_piece(polylines, k, m)
+            n_cut += 1
+        if n_cut:
+            print(f"corner split: {n_cut} cut(s) at turns >= "
+                  f"{cfg.corner_split_deg:.0f}° — straight strokes now sew as "
+                  f"their own columns")
+
+    def _cut_piece(self, polylines, k, m):
+        """Replace polylines[k] with its two halves cut at piece index m."""
+        pts, w, method, rails, extra = polylines[k]
+        tstart, tend = extra.get("taper", (0.0, 0.0))
+        rebuilt = []
+        for half, t0, t1 in ((extra["piece"][:m + 1], tstart, 0.0),
+                             (extra["piece"][m:], 0.0, tend)):
+            straight, _ = self._straighten(list(half))
+            rebuilt.append((
+                self.rdp(straight, self.rdp_eps_px),
+                2 * float(np.mean([self._edt_at(p) for p in half]))
+                * self.mm_per_px,
+                "column",
+                self._tapered_column(list(half), t0, t1),
+                {"piece": straight, "taper": (t0, t1)},
+            ))
+        polylines[k:k + 1] = rebuilt
+
+    def _piece_turn(self, piece, s_arc, i, win):
+        """Angle between the chords `win` px before and after piece[i]."""
+        a = int(np.searchsorted(s_arc, s_arc[i] - win))
+        b = int(np.searchsorted(s_arc, s_arc[i] + win)) - 1
+        b = min(len(piece) - 1, max(b, i + 1))
+        a = max(0, min(a, i - 1))
+        d1 = piece[i] - piece[a]
+        d2 = piece[b] - piece[i]
+        n1, n2 = np.hypot(*d1), np.hypot(*d2)
+        if n1 < 1e-9 or n2 < 1e-9:
+            return 0.0
+        c = float(np.dot(d1, d2) / (n1 * n2))
+        return float(np.arccos(max(-1.0, min(1.0, c))))
+
+    def _concave_split(self, polylines):
+        """Cut curving branches where the ink boundary has a concave corner
+        (see TraceConfig.concave_split_deg)."""
+        cfg = self.cfg
+        if cfg.concave_split_deg <= 0:
+            return
+        r = max(1, int(round(cfg.concave_split_radius_mm * self.px_per_mm)))
+        yy, xx = np.ogrid[-r:r + 1, -r:r + 1]
+        disc = (yy ** 2 + xx ** 2) <= r * r
+        wedges = ndimage.binary_closing(self.ink, disc, border_value=0) & ~self.ink
+        lbl, n = ndimage.label(wedges, structure=np.ones((3, 3)))
+        if not n:
+            return
+        corners = ndimage.center_of_mass(wedges, lbl, range(1, n + 1))
+        sizes = ndimage.sum(wedges, lbl, range(1, n + 1))
+        corners = [c for c, a in zip(corners, sizes) if a >= 4]
+        threshold = np.radians(cfg.concave_split_deg)
+        n_cut = 0
+        for cy, cx in corners:
+            best = None
+            for k, (pts, w, method, rails, extra) in enumerate(polylines):
+                if method != "column" or not extra or "piece" not in extra:
+                    continue
+                if extra.get("direct_ring"):
+                    continue
+                piece = np.array(extra["piece"], float)
+                if len(piece) < 8:
+                    continue
+                d = np.hypot(piece[:, 0] - cy, piece[:, 1] - cx)
+                i = int(np.argmin(d))
+                w_px = max(3.0, w * self.px_per_mm)
+                if d[i] > 1.0 * w_px:
+                    continue
+                if best is None or d[i] < best[0]:
+                    best = (d[i], k, i, w_px)
+            if best is None:
+                continue
+            _, k, i, w_px = best
+            piece = np.array(polylines[k][4]["piece"], float)
+            seg = np.hypot(*(piece[1:] - piece[:-1]).T)
+            s_arc = np.concatenate([[0.0], np.cumsum(seg)])
+            if s_arc[i] < 1.2 * w_px or s_arc[-1] - s_arc[i] < 1.2 * w_px:
+                continue
+            if self._piece_turn(piece, s_arc, i, w_px) < threshold:
+                continue
+            self._cut_piece(polylines, k, i)
+            n_cut += 1
+        if n_cut:
+            print(f"concave split: {n_cut} cut(s) where a curving branch "
+                  f"passes a concave ink corner")
+
+    def _straight_rect_mask(self, piece, w):
+        """Constant-width rectangle along a straight piece, extended while
+        its full width is still inside the ink and clipped to the ink; None
+        if the piece bends.
+
+        Straightness and direction are read from the MIDDLE of the piece: a
+        medial-axis run always curls toward the junction in its last half
+        width or so, and that curl is not a curve in the stroke. Extension
+        runs while both rails are still in ink, so a stem reaches the top of
+        its letter but a diagonal stops once it pokes out of the stem it
+        joins — the overlap is set by the geometry, not by a fixed cap."""
+        p = np.array(piece, float)
+        if len(p) < 3:
+            return None
+        seg = np.hypot(*(p[1:] - p[:-1]).T)
+        s_arc = np.concatenate([[0.0], np.cumsum(seg)])
+        total = s_arc[-1]
+        w_px = max(3.0, w * self.px_per_mm)
+        if total < 1.5 * w_px:
+            return None
+        # resample so a five-point RDP piece gets a real middle
+        n = max(16, int(total / 2.0))
+        si = np.linspace(0.0, total, n)
+        rp = np.stack([np.interp(si, s_arc, p[:, 0]), np.interp(si, s_arc, p[:, 1])], 1)
+        lo, hi = int(0.15 * n), int(0.85 * n)
+        mid = rp[lo:hi]
+        a, b = mid[0], mid[-1]
+        ab = b - a
+        L = float(np.hypot(*ab))
+        if L < 1e-6:
+            return None
+        u = ab / L
+        dev = np.abs(ab[0] * (mid - a)[:, 1] - ab[1] * (mid - a)[:, 0]) / L
+        if dev.max() > 0.12 * w_px:
+            return None
+        h = float(np.median([self._edt_at(q) for q in mid]))
+        if h < 1.0:
+            return None
+        nrm = np.array([-u[1], u[0]])
+
+        def in_ink(q):
+            yq, xq = int(round(q[0])), int(round(q[1]))
+            return (0 <= yq < self.ink.shape[0] and 0 <= xq < self.ink.shape[1]
+                    and bool(self.ink[yq, xq]))
+
+        def extend(pt, direction):
+            out = pt.copy()
+            for step in np.arange(1.0, 1.5 * w_px, 1.0):
+                q = pt + direction * step
+                if not (in_ink(q) and in_ink(q + nrm * 0.9 * h)
+                        and in_ink(q - nrm * 0.9 * h)):
+                    break
+                out = q
+            return out
+
+        a2, b2 = extend(a, -u), extend(b, u)
+        poly = [tuple(v[::-1]) for v in (a2 + nrm * h, b2 + nrm * h,
+                                         b2 - nrm * h, a2 - nrm * h)]
+        canvas = Image.new("1", (self.ink.shape[1], self.ink.shape[0]), 0)
+        ImageDraw.Draw(canvas).polygon(poly, fill=1)
+        return np.array(canvas, dtype=bool) & self.ink, L * 2 * h
+
     def _counter_wrap_split(self, polylines):
         """Cut any branch that curves back around its own counter.
 
@@ -1081,8 +1323,11 @@ class WordmarkTracer:
         rungs fail keeps rails-only extras = None and falls back to the
         legacy skeleton satin at write time."""
         cfg = self.cfg
+        self._corner_split(polylines)
+        self._concave_split(polylines)
         self._counter_wrap_split(polylines)
         assigned = self._assign_ink(polylines)
+        n_rect = 0
 
         overlap_it = max(1, int(round(cfg.branch_overlap_mm * self.px_per_mm)))
         n_ok = n_fallback = 0
@@ -1096,6 +1341,24 @@ class WordmarkTracer:
                 # when the rest of the job uses outline mode.
                 continue
             mask = assigned == k + 1
+            if cfg.straight_rect_cols and extra and "piece" in extra:
+                found = self._straight_rect_mask(extra["piece"], w)
+                # Only where it helps: a stem whose nearest-skeleton mask
+                # already IS its rectangle gains nothing and pays a second
+                # layer at every junction (measured +4% stitches, clump
+                # 36->41 when every straight piece was swapped). The case
+                # that fans is a mask cut OBLIQUELY where the stroke meets a
+                # neighbour — the stems of an N lose a slanted slice to the
+                # diagonal's skeleton and fill_to_satin fans between that
+                # slanted end and the perpendicular interior. Swap in the
+                # rectangle only when the mask is missing a real share of it.
+                if found is not None:
+                    rect, _ = found
+                    if rect.any() and (
+                            (rect & ~mask).sum() >= 0.25 * rect.sum()
+                            or (mask & ~rect).sum() >= 0.25 * mask.sum()):
+                        mask = rect
+                        n_rect += 1
             if not mask.any():
                 polylines[k] = (pts, w, method, rails, None)
                 n_fallback += 1
@@ -1165,7 +1428,8 @@ class WordmarkTracer:
         for k, (pts, w, method, rails, extra) in enumerate(polylines):
             if method == "bean" and extra is not None:
                 polylines[k] = (pts, w, method, rails, None)
-        print(f"outline mode: {n_ok} branches converted to fills, "
+        print(f"outline mode: {n_ok} branches converted to fills "
+              f"({n_rect} straight strokes as rectangles), "
               f"{n_fallback} fell back to skeleton rails")
 
     def _apply_rung_overrides(self, polylines):
