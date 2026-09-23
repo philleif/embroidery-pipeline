@@ -179,7 +179,8 @@ def deploy(
         ) as temp_file:
             temp_path = Path(temp_file.name)
         shutil.copy2(pes_path, temp_path)
-        with temp_path.open("rb") as copied:
+        # Windows requires write access when flushing a file handle.
+        with temp_path.open("r+b") as copied:
             os.fsync(copied.fileno())
         temp_path.replace(dest)
         temp_path = None
@@ -187,13 +188,15 @@ def deploy(
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
     try:
-        subprocess.run(["sync"], check=False, timeout=60)
+        sync_binary = shutil.which("sync")
+        if sync_binary:
+            subprocess.run([sync_binary], check=False, timeout=60)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"timed out while flushing writes to {device}") from None
     if dest.stat().st_size != pes_path.stat().st_size or _sha256(dest) != _sha256(pes_path):
         raise RuntimeError(f"verification failed after copying {pes_path.name} to {device}")
 
-    print(f"\ncopied and verified {pes_path.name} → {dest}")
+    print(f"\ncopied and verified {pes_path.name} -> {dest}")
     if preset is not None:
         print("\n--- LOAD-OUT CHECKLIST ---")
         print(f"preset: {preset.name}")

@@ -83,7 +83,7 @@ def _digitize(
     strict_audit: bool = True,
     reference_image: Path | None = None,
 ) -> int:
-    """Shared pipeline: source SVG → tuned SVG → PES (normalized) → summary.
+    """Shared pipeline: source SVG -> tuned SVG -> PES (normalized) -> summary.
 
     If the design flags any stroked centerlines with data-stitch-method="satin",
     a stroke_to_satin pre-pass converts them into real satin columns before the
@@ -139,19 +139,19 @@ def _digitize(
 
         print(f"tuning {working_source.name} for preset {preset.name!r}")
         tuning.tune_svg(working_source, tuned_svg, preset)
-        print(f"  → {_rel(tuned_svg)}")
+        print(f"  -> {_rel(tuned_svg)}")
 
         to_stitch = tuned_svg
         satin_ids = tuning.collect_satin_stroke_ids(tuned_svg)
         if satin_ids:
-            print(f"converting {len(satin_ids)} stroked path(s) → satin columns "
+            print(f"converting {len(satin_ids)} stroked path(s) -> satin columns "
                   "(stroke_to_satin)")
             satin_svg = stage / f"{name}.satin.svg"
             inkstitch.run_effect("stroke_to_satin", tuned_svg, satin_svg, ids=satin_ids)
             retuned_svg = stage / f"{name}.tuned2.svg"
             tuning.tune_svg(satin_svg, retuned_svg, preset)
             to_stitch = retuned_svg
-            print(f"  → {_rel(satin_svg)}  →  {_rel(retuned_svg)}")
+            print(f"  -> {_rel(satin_svg)}  ->  {_rel(retuned_svg)}")
 
         compiled_results = compiled.validate_compiled_objects(to_stitch, stage)
         for line in compiled.format_results(compiled_results):
@@ -168,7 +168,7 @@ def _digitize(
 
         print("running Ink/Stitch")
         inkstitch.svg_to_pes(to_stitch, pes)
-        print(f"  → {_rel(pes)}")
+        print(f"  -> {_rel(pes)}")
 
         print("normalizing PES metadata")
         convert_mod.normalize_pes(pes, preset=preset)
@@ -199,7 +199,7 @@ def _digitize(
             bundle_artifacts["visual_qa"] = qa_png
             print(f"visual QA: {visual_report['silhouette_mismatch_pct']:.2f}% "
                   "normalized silhouette difference (advisory)")
-            print(f"  → {_rel(qa_png)}")
+            print(f"  -> {_rel(qa_png)}")
 
         manifest = stage / f"{name}.manifest.json"
         artifacts.write_manifest(
@@ -227,7 +227,7 @@ def _digitize(
         )
         print("published atomic artifact bundle")
         for key, path in bundle_artifacts.items():
-            print(f"  {key:12s} → {_rel(out_dir / path.name)}")
+            print(f"  {key:12s} -> {_rel(out_dir / path.name)}")
     return 0
 
 
@@ -271,7 +271,7 @@ def cmd_hershey(args: argparse.Namespace) -> int:
         smooth=args.smooth,
     )
     rel = prepared_svg.relative_to(Path.cwd()) if prepared_svg.is_relative_to(Path.cwd()) else prepared_svg
-    print(f"  → {rel}")
+    print(f"  -> {rel}")
     return _digitize(
         prepared_svg, out_dir, name, preset,
         strict_audit=getattr(args, "strict_audit", False),
@@ -293,7 +293,7 @@ def cmd_swatch(args: argparse.Namespace) -> int:
     print(f"building swatch from {logo.name}")
     swatch_mod.build_swatch(logo, swatch_svg)
     rel = swatch_svg.relative_to(Path.cwd()) if swatch_svg.is_relative_to(Path.cwd()) else swatch_svg
-    print(f"  → {rel}")
+    print(f"  -> {rel}")
     print()
     print("row legend:")
     for line in swatch_mod.row_legend().splitlines():
@@ -316,7 +316,7 @@ def _finalize_pes(
     and print summary, machine-limit warnings, and the quality audit."""
     print("normalizing PES metadata")
     convert_mod.normalize_pes(pes, preset=preset)
-    print(f"  → {pes}")
+    print(f"  -> {pes}")
     _print_pes_stats(pes)
     from . import audit as audit_mod
     print(f"quality audit{f' ({profile})' if profile else ''}")
@@ -338,8 +338,8 @@ def cmd_lettering_swatch(args: argparse.Namespace) -> int:
     pes = out_dir / f"{name}.pes"
 
     print(f"building lettering swatch via Ink/Stitch batch_lettering")
-    print(f"  LOSERS → Barstitch Bold @ 50% (≈13mm caps)")
-    print(f"  (917)-524-7853 → Ink/Stitch Small Font @ 135% (≈7mm digits)")
+    print(f"  LOSERS -> Barstitch Bold @ 50% (~13mm caps)")
+    print(f"  (917)-524-7853 -> Ink/Stitch Small Font @ 135% (~7mm digits)")
     print(f"  per-glyph trims via --trim=glyph")
     print(f"  thread metadata from preset {preset.name!r}")
     lettering_mod.build_lettering_swatch(pes)
@@ -362,8 +362,8 @@ def cmd_lettering_logo(args: argparse.Namespace) -> int:
     pes = out_dir / f"{name}.pes"
 
     print(f"building DL-logo via Ink/Stitch batch_lettering")
-    print(f"  DESPERATE / LOSERS → Barstitch Bold @ 50% (≈13mm caps)")
-    print(f"  (917)-524-7853 → Ink/Stitch Small Font @ 135% (≈7mm digits)")
+    print(f"  DESPERATE / LOSERS -> Barstitch Bold @ 50% (~13mm caps)")
+    print(f"  (917)-524-7853 -> Ink/Stitch Small Font @ 135% (~7mm digits)")
     print(f"  per-glyph trims via --trim=glyph")
     print(f"  thread metadata from preset {preset.name!r}")
     lettering_mod.build_lettering_logo(pes)
@@ -435,7 +435,7 @@ def cmd_from_generative(args: argparse.Namespace) -> int:
 
     print(f"running PEmbroider sketch {sketch.name} with preset {preset.name!r}")
     processing.run_sketch(sketch, preset, pes)
-    print(f"  → {pes}")
+    print(f"  -> {pes}")
     return _finalize_pes(
         pes, preset=preset, profile="mixed",
         strict_audit=args.strict_audit,
@@ -455,7 +455,7 @@ def cmd_offset(args: argparse.Namespace) -> int:
         dst = src.with_name(f"{src.stem}{suffix}.pes")
     print(f"offsetting {src.name} by x={args.x_mm:+g}mm y={args.y_mm:+g}mm")
     convert_mod.offset_pes(src, dst, x_mm=args.x_mm, y_mm=args.y_mm)
-    print(f"  → {dst}")
+    print(f"  -> {dst}")
     _print_pes_stats(dst)
     from . import audit as audit_mod
     print("quality audit (mixed)")
@@ -468,7 +468,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     dst = Path(args.out).resolve() if args.out else src.with_suffix(".pes")
     convert_mod.normalize_pes(src, dst)
     summary = convert_mod.describe(dst)
-    print(f"{src.name} → {dst}  (stitches: {summary['stitch_count']}, bounds_mm: {summary['bounds_mm']})")
+    print(f"{src.name} -> {dst}  (stitches: {summary['stitch_count']}, bounds_mm: {summary['bounds_mm']})")
     from . import audit as audit_mod
     print(f"quality audit ({args.profile})")
     _, failures = audit_mod.audit(dst, profile=args.profile)
@@ -574,16 +574,21 @@ def cmd_preview(args: argparse.Namespace) -> int:
     out_svg = src.parent / f"{src.stem}.preview.svg"
     with out_svg.open("wb") as f:
         pyembroidery.write_svg(pattern, f)
-    print(f"  → {out_svg}")
+    print(f"  -> {out_svg}")
 
     if args.png:
         out_png = src.parent / f"{src.stem}.preview.png"
         with out_png.open("wb") as f:
             pyembroidery.write_png(pattern, f)
-        print(f"  → {out_png}")
+        print(f"  -> {out_png}")
 
     if args.open:
-        subprocess.run(["open", str(out_svg)], check=False)
+        if sys.platform == "win32":
+            import os
+            os.startfile(out_svg)
+        else:
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.run([opener, str(out_svg)], check=False)
     return 0
 
 
@@ -657,7 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_trace.add_argument("--finish-png")
     p_trace.set_defaults(func=cmd_trace)
 
-    p_svg = sub.add_parser("from-svg", help="SVG → tuned SVG → .pes via Ink/Stitch")
+    p_svg = sub.add_parser("from-svg", help="SVG -> tuned SVG -> .pes via Ink/Stitch")
     p_svg.add_argument("input")
     p_svg.add_argument("--preset", required=True, choices=list_preset_names())
     p_svg.add_argument("-o", "--out", help="output directory (default: ./out)")
@@ -671,7 +676,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_hsh = sub.add_parser(
         "hershey",
-        help="render <text> as single-stroke Hershey paths → running/bean stitch PES",
+        help="render <text> as single-stroke Hershey paths -> running/bean stitch PES",
     )
     p_hsh.add_argument("input", help="SVG with live <text> elements")
     p_hsh.add_argument("--preset", default="hat-twill-black-detail",
@@ -754,7 +759,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_strict_audit_switch(p_let)
     p_let.set_defaults(func=cmd_lettering)
 
-    p_gen = sub.add_parser("from-generative", help="PEmbroider sketch → .pes")
+    p_gen = sub.add_parser("from-generative", help="PEmbroider sketch -> .pes")
     p_gen.add_argument("sketch")
     p_gen.add_argument("--preset", required=True, choices=list_preset_names())
     p_gen.add_argument("-o", "--out")
@@ -776,7 +781,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_strict_audit_switch(p_off)
     p_off.set_defaults(func=cmd_offset)
 
-    p_conv = sub.add_parser("convert", help="any embroidery format → PES v6")
+    p_conv = sub.add_parser("convert", help="any embroidery format -> PES v6")
     p_conv.add_argument("input")
     p_conv.add_argument("-o", "--out")
     p_conv.add_argument(
