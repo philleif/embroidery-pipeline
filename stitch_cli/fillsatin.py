@@ -27,6 +27,7 @@ fix the branch (sidecar rungs) rather than shipping that.
 from __future__ import annotations
 
 import copy
+import math
 import re
 import tempfile
 from pathlib import Path
@@ -102,6 +103,180 @@ def _buried_fraction(ink: dict, elem: etree._Element) -> float:
     return _polyline_buried(ink, _pairs(elem))
 
 
+
+
+_PATH_NUM = r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?"
+
+
+def _flatten_subpath(subpath: str, steps: int = 12) -> list[tuple[float, float]]:
+    """Flatten one M/L/C subpath to a polyline."""
+    tokens = re.findall(r"[MmLlCcZz]|" + _PATH_NUM, subpath)
+    points: list[tuple[float, float]] = []
+    current: tuple[float, float] | None = None
+    command = None
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in "MmLlCcZz":
+            command = token
+            index += 1
+            continue
+        if command in "Mm":
+            current = (float(tokens[index]), float(tokens[index + 1]))
+            points.append(current)
+            index += 2
+            command = "L" if command == "M" else "l"
+        elif command in "Ll":
+            current = (float(tokens[index]), float(tokens[index + 1]))
+            points.append(current)
+            index += 2
+        elif command in "Cc":
+            c = [float(tokens[index + k]) for k in range(6)]
+            index += 6
+            p0, p1, p2, p3 = current, (c[0], c[1]), (c[2], c[3]), (c[4], c[5])
+            for k in range(1, steps + 1):
+                u = k / steps
+                v = 1 - u
+                points.append((
+                    v ** 3 * p0[0] + 3 * v * v * u * p1[0]
+                    + 3 * v * u * u * p2[0] + u ** 3 * p3[0],
+                    v ** 3 * p0[1] + 3 * v * v * u * p1[1]
+                    + 3 * v * u * u * p2[1] + u ** 3 * p3[1]))
+            current = p3
+        else:
+            index += 1
+    return points
+
+
+def _resample(points: list[tuple[float, float]], step: float):
+    """Even arc-length resampling; keeps the true final point."""
+    if len(points) < 2:
+        return list(points)
+    out = [points[0]]
+    carried = 0.0
+    for a, b in zip(points, points[1:]):
+        span = math.hypot(b[0] - a[0], b[1] - a[1])
+        if span <= 0:
+            continue
+        travelled = 0.0
+        while carried + span - travelled >= step:
+            travelled += step - carried
+            out.append((a[0] + (b[0] - a[0]) * travelled / span,
+                        a[1] + (b[1] - a[1]) * travelled / span))
+            carried = 0.0
+        carried += span - travelled
+    if math.hypot(out[-1][0] - points[-1][0], out[-1][1] - points[-1][1]) > 1e-9:
+        out.append(points[-1])
+    return out
+
+
+def _ray_polyline_hit(origin, direction, polyline):
+    """Parameter t along origin+t*direction where it crosses ``polyline``,
+    choosing the crossing nearest the origin. None if it never does."""
+    best = None
+    ox, oy = origin
+    dx, dy = direction
+    for (ax, ay), (bx, by) in zip(polyline, polyline[1:]):
+        ex, ey = bx - ax, by - ay
+        denom = dx * ey - dy * ex
+        if abs(denom) < 1e-12:
+            continue
+        t = ((ax - ox) * ey - (ay - oy) * ex) / denom
+        u = ((ax - ox) * dy - (ay - oy) * dx) / denom
+        if -1e-9 <= u <= 1 + 1e-9:
+            if best is None or abs(t) < abs(best):
+                best = t
+    return best
+
+
+def _refit_rung(rung, rails, margin_mm: float = 0.30):
+    """Stretch a rung so it lands ``margin_mm`` clear of both smoothed rails."""
+    start, end = rung[0], rung[-1]
+    length = math.hypot(end[0] - start[0], end[1] - start[1])
+    if length < 1e-9:
+        return None
+    direction = ((end[0] - start[0]) / length, (end[1] - start[1]) / length)
+    middle = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
+    hits = [_ray_polyline_hit(middle, direction, rail) for rail in rails]
+    if any(t is None for t in hits) or hits[0] * hits[1] >= 0:
+        return None                    # rails not on opposite sides: leave it
+    low, high = sorted(hits)
+    return [(middle[0] + direction[0] * (low - margin_mm),
+             middle[1] + direction[1] * (low - margin_mm)),
+            (middle[0] + direction[0] * (high + margin_mm),
+             middle[1] + direction[1] * (high + margin_mm))]
+
+
+def smooth_satin_rails(root: etree._Element, step_mm: float = 0.4,
+                       window: int = 3, passes: int = 2) -> int:
+    """Damp trace jitter out of every satin rail, in place.
+
+    A branch outline traced from a rough raster carries direction noise far
+    below thread resolution: resampled at the zigzag pitch the rails of this
+    BEACH BABY brush script turn a 90th-percentile 53 degrees between
+    consecutive stitches, against ~23 on a hand-digitized reference. The
+    machine cannot render that detail — it just scatters penetrations along
+    the rail and reads as a ragged column edge.
+
+    Two passes of a 3-sample moving average over pitch-spaced points take the
+    tail from p90 53 to 22 degrees while leaving median curvature alone
+    (6.9 -> 5.8), and move a rail by at most ~0.35mm — under the thread width,
+    so rungs still cross and columns keep their width. A third pass buys
+    another 4 degrees for 0.5mm of cumulative displacement, which is a quarter
+    of a typical column width: that starts rounding the letterform itself, so
+    the jitter floor here is deliberate. Rails only; rungs and every other
+    subpath are passed through untouched."""
+    smoothed = 0
+    half = window // 2
+
+    def averaged_once(points):
+        # Endpoints stay put: they are the column's caps, and moving them
+        # would shorten the satin away from its neighbour's overlap.
+        out = [points[0]]
+        for i in range(1, len(points) - 1):
+            lo, hi = max(0, i - half), min(len(points), i + half + 1)
+            out.append((sum(p[0] for p in points[lo:hi]) / (hi - lo),
+                        sum(p[1] for p in points[lo:hi]) / (hi - lo)))
+        out.append(points[-1])
+        return out
+
+    for path in root.iter(_qn(SVG_NS, "path")):
+        if not _is_satin(path):
+            continue
+        subpaths = re.findall(r"[Mm][^Mm]*", path.get("d") or "")
+        if len(subpaths) < 2:
+            continue
+        rails = []
+        for subpath in subpaths[:2]:
+            points = _resample(_flatten_subpath(subpath), step_mm)
+            if len(points) < window + 2:
+                rails = []
+                break
+            for _ in range(passes):
+                points = averaged_once(points)
+            rails.append(points)
+        if not rails:
+            continue
+        rebuilt = [
+            "M " + " L ".join(f"{x:.3f} {y:.3f}" for x, y in rail)
+            for rail in rails
+        ]
+        # A rung has to cross both rails to steer the column. Moving a rail out
+        # from under one turns it into a preflight `rung_misses_rail` and it is
+        # deleted — which is how an over-eager smoothing pass silently strips a
+        # column's direction guides and reopens the gap it was meant to fix.
+        # Re-seat every rung on the rails it now has to span.
+        for subpath in subpaths[2:]:
+            rung = _flatten_subpath(subpath)
+            refitted = _refit_rung(rung, rails) if len(rung) >= 2 else None
+            if refitted is None:
+                rebuilt.append(subpath.strip())
+            else:
+                rebuilt.append(
+                    "M " + " L ".join(f"{x:.3f} {y:.3f}" for x, y in refitted))
+        path.set("d", " ".join(rebuilt))
+        smoothed += 1
+    return smoothed
 
 
 def _tier_attrs(w_mm: float) -> dict[str, str]:
@@ -184,7 +359,8 @@ def _convert_branch(root, fill, rungs, next_id, workdir):
 
 
 def convert_outline_svg(source_svg: Path, output_svg: Path,
-                        run_auto_satin: bool = True) -> Path:
+                        run_auto_satin: bool = True,
+                        preserve_order: bool = False) -> Path:
     """Convert every outline-mode glyph group in ``source_svg``; write the
     result (still un-tuned — tune_svg runs after this) to ``output_svg``."""
     tree = etree.parse(str(source_svg))
@@ -247,6 +423,10 @@ def convert_outline_svg(source_svg: Path, output_svg: Path,
               + (f", {n_fail} FAILED — left as auto_fill, fix these"
                  if n_fail else ""))
 
+        # Damp trace jitter before routing, so auto_satin measures travel
+        # against the rails the machine will actually sew.
+        print(f"  smoothed rails on {smooth_satin_rails(root)} satin columns")
+
         # Pass 2 — per-glyph auto_satin routing, ISOLATED like pass 1:
         # auto_satin is seconds on a single-glyph document but times out on
         # the full design (its runtime scales with every element in the doc,
@@ -270,7 +450,8 @@ def convert_outline_svg(source_svg: Path, output_svg: Path,
                     # untrimmed jump dragging thread across open counters.
                     inkstitch.run_effect(
                         "auto_satin", in_svg, out_svg,
-                        params={"trim": True, "preserve_order": False,
+                        params={"trim": True,
+                                "preserve_order": preserve_order,
                                 "keep_originals": False},
                         ids=sat_ids, timeout_s=120)
                 except Exception as exc:  # noqa: BLE001
@@ -305,6 +486,9 @@ def convert_outline_svg(source_svg: Path, output_svg: Path,
                         new_group.append(child)
                 parent = group.getparent()
                 parent.replace(group, new_group)
+
+    n_after = len([q for q in root.iter(_qn(SVG_NS, "path")) if _is_satin(q)])
+    print(f"  satin columns after routing: {n_after}")
 
     # Pass 3 — trim policy. auto_satin's own trim commands cover its chain
     # breaks (kept above, defs and all); everything else runs on into the

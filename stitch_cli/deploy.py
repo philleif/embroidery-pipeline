@@ -16,8 +16,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import convert
 from . import audit as audit_mod
+from . import artifacts
+from . import convert
 from .materials import ResolvedPreset
 
 
@@ -79,6 +80,34 @@ def deploy(
         )
     if not device.exists() or not device.is_dir():
         raise NotADirectoryError(f"{device} is not a mounted volume")
+
+    # A from-svg production bundle carries an adjacent manifest.  Verify it
+    # before parsing or copying so a stale PES, a partially promoted bundle,
+    # or a source changed since the last build cannot reach the USB stick.
+    # Direct/legacy PES generators do not all emit manifests yet, so absence
+    # remains an explicit warning rather than an unconditional failure.
+    manifest = artifacts.manifest_for_artifact(pes_path)
+    if manifest.exists():
+        payload, manifest_failures = artifacts.verify_manifest(manifest)
+        pes_entries = [
+            entry for entry in payload.get("artifacts", {}).values()
+            if entry.get("file") == pes_path.name
+        ]
+        if not pes_entries:
+            manifest_failures.append(
+                f"manifest does not record machine file {pes_path.name}"
+            )
+        if manifest_failures:
+            raise RuntimeError(
+                "refusing to deploy a stale or incomplete artifact bundle: "
+                + "; ".join(manifest_failures)
+            )
+        print(f"verified build manifest: {manifest.name}")
+    else:
+        print(
+            "WARNING: no adjacent build manifest; source freshness and bundle "
+            "integrity could not be verified"
+        )
 
     summary = convert.describe(pes_path)
     bounds = summary["bounds_mm"]

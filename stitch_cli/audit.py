@@ -41,6 +41,12 @@ BANDS = {
     "satin_pitch": (0.30, 0.44, "mm", "pro corpus 0.32-0.40"),
     "satin_w10":   (1.00, None, "mm", "pro corpus 1.04-1.53 — the width floor"),
     "trims_per_1k": (None, 9.0, "trims per 1000 stitches", "pro corpus 3.6-8.3"),
+    # A stitch this long is not a normal routed run and exceeds the project's
+    # 4mm satin split ceiling.  It usually means an obsolete connector or a
+    # no-trim object boundary was emitted as a sewn float instead of a jump.
+    "long_stitch_over_5_count": (
+        None, 0.0, "sewn segments > 5mm", "production output should contain none"
+    ),
 }
 
 # Opt-in per-design-class bands, enforced on top of BANDS via audit(profile=...).
@@ -55,15 +61,31 @@ PROFILES = {
         "pitch_over_08_pct":  (None, 3.0, "% of advances > 0.8mm", "pro ~0.5"),
         "run_pct":            (10.0, 25.0, "% stitches in underlay/travel runs", "pro 15.8"),
         "blocks":             (None, 25.0, "trim-separated stitch runs", "pro = 1/glyph (17)"),
+        "satin_heading_p90_deg": (None, 30.0, "degrees", "interior rail turn; hand reference 22.6"),
+        "satin_abrupt_25_pct": (None, 15.0, "% interior rail turns >25°", "hand reference ~10"),
     },
     # Closed satin borders intentionally surround large empty counters, so
     # whole-bounds density and the wordmark reversal ratio are not meaningful.
     # The actual safety/quality signals remain enforced.
     "satin-outline": {},
     "satin-lettering": {},
-    "fill": {},
+    "fill": {
+        # Fill bands are re-based on the pro fills measured 2026-09: the Zenbul
+        # ring (0.20 mm tatami, satin border) audits at 96 st/cm^2 / peak 17, the
+        # CHGL napkin (0.21 mm tatami + border + satin lettering on top) at 225
+        # / peak 21. Density is bbox-based, so a solid mass legitimately sits far
+        # above the lettering band.
+        "density": (55.0, 240.0, "stitches/cm^2", "pro fills 96-225"),
+        "peak_1mm": (None, 22.0, "penetrations in any 1mm cell", "pro fills 17-21"),
+    },
     "running": {},
-    "mixed": {},
+    # A mixed logo may contain bean/fill decoration around satin lettering.
+    # Reversal-run detection isolates the satin passages, so the interior
+    # smoothness checks remain meaningful without applying all wordmark bands.
+    "mixed": {
+        "satin_heading_p90_deg": (None, 30.0, "degrees", "interior rail turn; hand reference 22.6"),
+        "satin_abrupt_25_pct": (None, 15.0, "% interior rail turns >25°", "hand reference ~10"),
+    },
 }
 
 # Base-band subsets by design technique. peak_1mm is universal: regardless of
@@ -75,11 +97,12 @@ PROFILE_BASE_KEYS = {
     "satin-lettering": set(BANDS),
     "satin-outline": {
         "peak_1mm", "short_pct", "p10_len", "satin_pitch", "satin_w10",
-        "trims_per_1k",
+        "trims_per_1k", "long_stitch_over_5_count",
     },
-    "fill": {"density", "peak_1mm", "short_pct", "p10_len", "trims_per_1k"},
-    "running": {"peak_1mm", "trims_per_1k"},
-    "mixed": {"peak_1mm", "trims_per_1k"},
+    "fill": {"density", "peak_1mm", "short_pct", "p10_len", "trims_per_1k",
+             "long_stitch_over_5_count"},
+    "running": {"peak_1mm", "trims_per_1k", "long_stitch_over_5_count"},
+    "mixed": {"peak_1mm", "trims_per_1k", "long_stitch_over_5_count"},
 }
 
 
@@ -213,6 +236,7 @@ def measure(path: Path) -> dict:
     # of a satin bite, for the tail metrics the median-only satin_pitch hides.
     run_st = 0
     badv = []
+    interior_heading_changes = []
     for blk in blocks:
         cur_run = 0
         for i in range(1, len(blk) - 1):
@@ -232,6 +256,52 @@ def measure(path: Path) -> dict:
                                            blk[i + 1][1] - blk[i - 1][1]))
         if cur_run >= 4:
             run_st += cur_run
+
+        # Smoothness belongs to the interior of a continuous satin reversal
+        # run. Object starts/caps, underlay handoffs, and bean turnarounds are
+        # deliberately excluded; those transitions polluted the old pitch-tail
+        # statistic and hid the actual along-rail quality.
+        segment_vectors = []
+        for p0, p1 in zip(blk, blk[1:]):
+            dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+            segment_vectors.append((dx, dy, math.hypot(dx, dy)))
+        reversals_in_block = []
+        for first, second in zip(segment_vectors, segment_vectors[1:]):
+            denom = first[2] * second[2]
+            dot = ((first[0] * second[0] + first[1] * second[1]) / denom
+                   if denom else 1.0)
+            reversals_in_block.append(
+                dot < -0.5 and first[2] > 0.4 and second[2] > 0.4
+            )
+        start = 0
+        while start < len(reversals_in_block):
+            if not reversals_in_block[start]:
+                start += 1
+                continue
+            end = start
+            while (end + 1 < len(reversals_in_block)
+                   and reversals_in_block[end + 1]):
+                end += 1
+            if end - start + 1 >= 6:
+                for parity in (0, 1):
+                    rail_vectors = []
+                    index = start + parity
+                    while index <= end and index + 2 < len(blk):
+                        dx = blk[index + 2][0] - blk[index][0]
+                        dy = blk[index + 2][1] - blk[index][1]
+                        distance = math.hypot(dx, dy)
+                        if 0.08 <= distance <= 1.5:
+                            rail_vectors.append((dx, dy))
+                        index += 2
+                    changes = []
+                    for first, second in zip(rail_vectors, rail_vectors[1:]):
+                        a1 = math.atan2(first[1], first[0])
+                        a2 = math.atan2(second[1], second[0])
+                        delta = abs((a2 - a1 + math.pi) % (2 * math.pi) - math.pi)
+                        changes.append(math.degrees(delta))
+                    if len(changes) > 6:
+                        interior_heading_changes.extend(changes[3:-3])
+            start = end + 1
 
     return {
         "size_mm": (w_mm, h_mm),
@@ -254,12 +324,22 @@ def measure(path: Path) -> dict:
         # denominator floor still catches genuinely fragmented minis while
         # preventing one or two object boundaries from dominating the score.
         "trims_per_1k": 1000.0 * trims / max(500, len(pts)),
+        "long_stitch_over_5_count": sum(1 for distance in nz if distance > 5.0),
         "blocks": len(blocks),
         "clump_pct": 100.0 * clumped / max(1, len(pts)),
         "run_pct": 100.0 * run_st / max(1, len(pts)),
         "pitch_p90": _pct(badv, 90) if len(badv) > 50 else float("nan"),
         "pitch_over_08_pct": (100.0 * sum(1 for a in badv if a > 0.8) / len(badv)
                               if len(badv) > 50 else float("nan")),
+        "satin_heading_p90_deg": (
+            _pct(interior_heading_changes, 90)
+            if len(interior_heading_changes) > 20 else float("nan")
+        ),
+        "satin_abrupt_25_pct": (
+            100.0 * sum(1 for angle in interior_heading_changes if angle > 25)
+            / len(interior_heading_changes)
+            if len(interior_heading_changes) > 20 else float("nan")
+        ),
     }
 
 

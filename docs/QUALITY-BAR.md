@@ -62,6 +62,9 @@ lettering* build that fails anything should not go to the machine.
 | `satin_pitch` | 0.30–0.44 mm | 0.32–0.40 |
 | `satin_w10` | ≥1.00 mm | 1.04–1.53 |
 | `trims_per_1k` | ≤9 | 3.6–8.3 |
+| `long_stitch_over_5_count` | 0 | no sewn floats over 5mm |
+| `satin_heading_p90_deg` | ≤30° | interior rail-direction smoothness |
+| `satin_abrupt_25_pct` | ≤15% | abrupt interior rail turns |
 
 Presets request 0.40mm zig-zag spacing. For broad traced columns, `trace_lib`
 requests 0.38mm locally because Ink/Stitch's measured same-rail pitch grows on
@@ -77,6 +80,14 @@ a raised cord instead of a flat column. Fix the width floor and the other two
 follow on their own. `TraceConfig` enforces 1.05mm as a hard minimum; artwork
 below it must become bean/running stitch rather than bypassing the floor with a
 per-job flag.
+
+`long_stitch_over_5_count` is universal and fail-closed. It ignores jumps and
+counts only sewn segments, so it catches an obsolete connector or an object
+handoff accidentally emitted as a visible float. The two heading metrics are
+enforced for satin wordmarks and mixed satin work. They measure only the
+interior of sustained zig-zag runs: caps, underlay handoffs, lock stitches, and
+bean turnarounds are deliberately excluded. This makes them sensitive to
+jagged rail fitting without blaming legitimate technique transitions.
 
 `density` is a whole-bounds average, so a sparse outline can pass it while a
 single cusp is being stitched into a knot. `peak_1mm` is the spatial backstop:
@@ -129,6 +140,27 @@ junction is invisible at preview resolution. `counter intrusion` is the one to
 watch when raising the width floor: fattening strokes closes the counters of
 `e`, `a`, `R` and `P` before it does anything else visible.
 
+## Three gates before publication
+
+The geometric coverage score cannot detect every interpretation error, so the
+production path now adds three independent gates:
+
+1. **SVG preflight** validates rail direction, explicit interior rungs, declared
+   rung counts, and routed connector endpoints before Ink/Stitch runs.
+2. **Compiled-object QA** stitches annotated critical objects in isolation and
+   checks their real machine-space bounds and stitch count. This catches a core
+   that looks closed in SVG but collapses after Ink/Stitch parses its topology.
+3. **Atomic bundle verification** creates PES, DST, both previews, the tuned
+   SVG, and optional reference overlay from one staged build. A manifest records
+   all checksums plus the source checksum and is promoted last. `stitch verify`
+   and `stitch deploy` reject a stale, tampered, or partially published bundle.
+
+The reference overlay is advisory because satin is intentionally wider than a
+hairline source image. It is still valuable for component count, clipping,
+missing spokes, terminal shape, and gross silhouette drift. Fabric remains the
+final authority: the manifest and preview prove pipeline consistency, not
+thread tension, stabilization, or cap distortion.
+
 ## Where the machinery lives
 
 Everything validated here is in `scripts/trace_lib.py` (`TraceConfig` +
@@ -177,3 +209,40 @@ artwork asks for ~9:1 thick-to-thin, the pro delivers 2.5:1, we now deliver
 2.7:1 (was 4:1). That is a deliberate craft choice with a real cost — more
 contrast is more fragile — and it is the setting to reach for first
 (`--min-col-mm`) if a sew-out reads either too heavy or too spindly.
+
+## Pro fill + satin corpus (Zenbul, Acre, CHGL napkin — 2026-09)
+
+Three more professionally digitized files, measured with the scratch analysers
+(`density.py`, `layers.py`, `satin.py`, `widths.py`). What they do, and what the
+pipeline now does because of them:
+
+| file | what it is | technique |
+|---|---|---|
+| Zenbul (78.8 x 99 mm, 7.5k st, 18.7 m, 9 trims) | brush ring + thin sans | ring = tatami **0.20 mm rows, 4.0 mm stitches**, staggered, one perpendicular tatami underlay at ~1.0 mm, then a **1.8 mm satin border over both fill edges** (own centre walk); the thin tail is border only. Letters = satin 2.6–3.1 mm (source 2.6 mm), one block per letter, zig-zag underlay + centre walk, 0.36 spacing. |
+| Acre (76.2 x 19 mm, 2.0k st, 6.1 m, 6 trims) | bold sans + two-colour monogram | **everything satin, up to 5 mm wide** — no fill on bold letters. Zig-zag underlay peaks **~1.2 mm** apart + walk, 0.40 spacing. Width matches source (3.4 vs 3.5 mm). One block per letter; the `a` counter is a satin ring; junctions overlap (stem sews over bowl end). |
+| CHGL napkin (95.4 mm square, 20.5k st, 63 m, 29 trims) | white napkin + black handwriting | napkin = tatami **0.21 mm rows, 4.0 mm**, tatami underlay at 90° (~1.6 mm), edge run at 2.5 mm, **2.9 mm satin border** on the square edge. Handwriting = **satin 1.0–1.35 mm** (source 0.72 mm, so 1.6–1.9x fattened), centre walk 1.1–1.4 mm, 0.40 spacing, one block per word. Not bean. |
+
+Cross-file constants: satin spacing 0.36–0.40; fill 0.20 mm rows with 4.0 mm
+stitches; fill underlay one perpendicular tatami at 1.0–1.6 mm; a satin border on
+every fill edge; lettering satin floor ~0.95–1.0 mm; one trim per glyph or word.
+
+Pipeline changes:
+
+- New preset `hat-twill-fill` (`materials/presets.toml`): 0.2 mm rows, 4.0 mm
+  stitches, `fill_underlay_row_spacing_mm = 1.2`, `fill_border_mm = 1.8`,
+  `zigzag_underlay_spacing_mm = 1.2`. About 2x the thread of
+  `hat-twill-badge-fill`; use it when a mass must read as solid cloth.
+- `fill_border_mm` (preset) / `data-fill-border-mm` (per path, `0` opts out):
+  `tuning.py` sews a running centre walk + a zig-zag of that width along every
+  subpath of the fill outline, right after the fill, one trim per subpath.
+- `fill_underlay_row_spacing_mm` (preset): fill underlay pitch; legacy presets
+  keep 3x row spacing.
+- `zigzag_underlay_spacing_mm` (preset) / `data-zigzag-underlay-mm` (per path):
+  zig-zag underlay pitch on satin columns; legacy 2.0.
+- Audit `fill` profile re-based: density 55–240 st/cm² (pro fills 96 and 225),
+  peak_1mm ≤22 (pro 17–21). The pro fills fail the lettering bands, which was the
+  audit, not the files.
+
+Probe: `designs/recipes/fill-ring.svg` → `stitch from-svg --preset
+hat-twill-fill` gives 0.23 mm top rows, 1.4 mm perpendicular underlay, a
+1.8 mm border in two blocks (outer edge, hole), all fill bands ok.

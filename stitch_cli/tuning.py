@@ -17,6 +17,8 @@ Convention used here:
 
 from __future__ import annotations
 
+import re
+
 from pathlib import Path
 
 from lxml import etree
@@ -266,6 +268,64 @@ def audit_profile_for_svg(svg_path: Path) -> str | None:
     return None
 
 
+FILL_BORDER_WALK_LENGTH_MM = "1.5"   # pro centre walk under the border: 1.5-1.9 mm
+
+
+def _split_subpaths(d: str) -> list[str]:
+    """Split a path ``d`` into its subpaths. Only safe when every subpath opens
+    with an absolute M (our tracers always emit that); a relative ``m`` after
+    the first subpath would lose its origin, so such paths stay whole."""
+    parts = [part.strip() for part in re.split(r"(?=[M])", d) if part.strip()]
+    if len(parts) > 1 and not any(re.search(r"(?<![A-Za-z])m", part[1:]) for part in parts):
+        return parts
+    return [d]
+
+
+def _add_fill_border(fill_path: etree._Element, width_mm: float, spacing: str) -> None:
+    """Sew a satin run over the edge of a fill, the way the pro Zenbul/CHGL
+    files do: a running-stitch centre walk along the outline, then a zig-zag
+    of ``width_mm`` centred on the same outline. Both are inserted right after
+    the fill so they sew on top of it. Each subpath of the fill (outer edge,
+    every hole) gets its own walk+zig-zag pair ending in a trim, so the border
+    never floats across the fill between two edges."""
+    parent = fill_path.getparent()
+    if parent is None or not fill_path.get("d"):
+        return
+    style = _style_to_dict(fill_path.get("style") or "")
+    color = style.get("fill") or "#000000"
+    base_id = fill_path.get("id") or "fill"
+    index = list(parent).index(fill_path)
+    transform = fill_path.get("transform")
+    for n, sub_d in enumerate(_split_subpaths(fill_path.get("d"))):
+        suffix = f"-{n}" if n else ""
+        walk = etree.Element(_qn(SVG_NS, "path"))
+        walk.set("id", f"{base_id}-border-walk{suffix}")
+        walk.set("style", f"fill:none;stroke:{color};stroke-width:0.3")
+        zig = etree.Element(_qn(SVG_NS, "path"))
+        zig.set("id", f"{base_id}-border{suffix}")
+        zig.set("style", f"fill:none;stroke:{color};stroke-width:{width_mm:.2f}")
+        for elem in (walk, zig):
+            elem.set("d", sub_d)
+            if transform:
+                elem.set("transform", transform)
+            _set_inkstitch(elem, "min_stitch_length_mm", MIN_STITCH_LEN_MM)
+            _set_inkstitch(elem, "min_jump_stitch_length_mm", MIN_JUMP_STITCH_LEN_MM)
+        # The walk runs straight on into the zig-zag (same start point): no
+        # trim and no lock between them. The zig-zag ends the block with both.
+        _set_inkstitch(walk, "stroke_method", "running_stitch")
+        _set_inkstitch(walk, "running_stitch_length_mm", FILL_BORDER_WALK_LENGTH_MM)
+        _set_inkstitch(walk, "running_stitch_tolerance_mm", RUNNING_TOLERANCE_MM)
+        _set_inkstitch(walk, "trim_after", "false")
+        _set_inkstitch(walk, "force_lock_stitches", "false")
+        _set_inkstitch(zig, "stroke_method", "zigzag_stitch")
+        _set_inkstitch(zig, "zigzag_spacing_mm", spacing)
+        _set_inkstitch(zig, "pull_compensation_mm", "0")
+        _set_inkstitch(zig, "trim_after", "true")
+        _set_inkstitch(zig, "force_lock_stitches", "true")
+        parent.insert(index + 1 + 2 * n, walk)
+        parent.insert(index + 2 + 2 * n, zig)
+
+
 def tune_svg(
     source_path: Path,
     output_path: Path,
@@ -295,7 +355,12 @@ def tune_svg(
     row_spacing = f"{preset.row_spacing_mm:.2f}"
     max_stitch_len = f"{preset.max_stitch_length_mm:.2f}"
     pull_comp = f"{preset.pull_compensation_mm:.2f}"
-    underlay_spacing = f"{preset.row_spacing_mm * 3:.2f}"  # sparse underlay grid
+    # Fill underlay pitch: preset value if it has one, else the legacy 3x row
+    # spacing. Both pro fills measured (2026-09) run it at 1.0-1.6 mm.
+    underlay_spacing = f"{preset.fill_underlay_row_spacing_mm or preset.row_spacing_mm * 3:.2f}"
+    zigzag_underlay_spacing = f"{getattr(preset, 'zigzag_underlay_spacing_mm', 2.0):.2f}"
+    preset_fill_border = float(getattr(preset, "fill_border_mm", 0.0) or 0.0)
+    fill_borders: list[tuple[etree._Element, float]] = []
     preset_satin_underlay = _satin_underlay_name(preset.satin_underlay)
     fill_underlay_enabled = preset.fill_underlay != "none"
 
@@ -338,7 +403,18 @@ def tune_svg(
         # lock has to come off with the trim or the trim comes back anyway.
         # (Measured: 8 chained satin columns → 7 trims with the lock forced,
         # 0 without.) Objects that do end in a trim keep their lock stitches.
-        _set_inkstitch(path, "force_lock_stitches", "true" if trim_after == "true" else "false")
+        # A buried end may still need a machine trim without an additional
+        # lock knot.  For example, closely spaced decorative spokes can be
+        # secured by a satin hub sewn immediately afterward; tying every spoke
+        # inside the same 1mm area creates a density hotspot.  This is an
+        # explicit per-path exception only--ordinary trimmed objects remain
+        # locked by default, and chained/no-trim objects remain unlocked.
+        lock_override = (path.get("data-force-lock") or "").strip().lower()
+        if trim_after == "false" or lock_override == "false":
+            force_lock = "false"
+        else:
+            force_lock = "true"
+        _set_inkstitch(path, "force_lock_stitches", force_lock)
 
         if kind == "fill":
             # Per-path opt-in: a source path can carry data-stitch-method to
@@ -368,19 +444,94 @@ def tune_svg(
             angle = path.get("data-fill-angle")
             if angle is not None:
                 _set_inkstitch(path, "angle", angle.strip())
+            # Pro fills (Zenbul ring, CHGL napkin) hide the tatami edge under a
+            # satin run sewn after the fill. Per-path data-fill-border-mm wins
+            # over the preset; "0" opts a path out.
+            border_attr = (path.get("data-fill-border-mm") or "").strip()
+            try:
+                border_mm = float(border_attr) if border_attr else preset_fill_border
+            except ValueError:
+                border_mm = preset_fill_border
+            if border_mm > 0:
+                fill_borders.append((path, border_mm))
         elif kind == "satin":
             _set_inkstitch(path, "satin_column", "true")
-            _set_inkstitch(path, "zigzag_spacing_mm",
-                           (path.get("data-satin-spacing-mm") or "").strip()
-                           or satin_spacing)
-            _set_inkstitch(path, "max_stitch_length_mm", SATIN_MAX_STITCH_MM)
+            zigzag_spacing = ((path.get("data-satin-spacing-mm") or "").strip()
+                              or satin_spacing)
+            _set_inkstitch(path, "zigzag_spacing_mm", zigzag_spacing)
+            # Longest unsplit zig-zag. Legacy 4.0; the satin recipe preset
+            # carries 5.0 because the pro Acre wordmark sews 5 mm columns
+            # whole (a split column halves its reversal share and reads as
+            # two ridges).
+            satin_max = (
+                (path.get("data-satin-max-stitch-mm") or "").strip()
+                or f"{getattr(preset, 'satin_max_stitch_mm', float(SATIN_MAX_STITCH_MM)):g}"
+            )
+            try:
+                satin_max_value = float(satin_max)
+            except ValueError:
+                satin_max_value = float(SATIN_MAX_STITCH_MM)
+            if not 4.0 <= satin_max_value <= 7.0:
+                satin_max_value = float(SATIN_MAX_STITCH_MM)
+            _set_inkstitch(
+                path, "max_stitch_length_mm", f"{satin_max_value:.1f}"
+            )
+            split_method = (
+                path.get("data-satin-split-method") or ""
+            ).strip().lower()
+            if split_method in {"default", "simple", "staggered"}:
+                _set_inkstitch(path, "split_method", split_method)
+            if split_method == "staggered":
+                try:
+                    staggers = float(
+                        (path.get("data-satin-split-staggers") or "4").strip()
+                    )
+                except ValueError:
+                    staggers = 4.0
+                if not 2.0 <= staggers <= 8.0:
+                    staggers = 4.0
+                _set_inkstitch(path, "staggers", f"{staggers:g}")
             # Pull compensation widens every column by a fixed amount, so on a
             # 0.8mm serif the same 0.2mm that's right for a 3mm stem is a 25%
             # fattening — it closes counters and puffs fine detail. A caller
             # that knows the column width can dial it down per path.
             _set_inkstitch(path, "pull_compensation_mm",
                            (path.get("data-pull-comp-mm") or "").strip() or pull_comp)
-            _set_inkstitch(path, "short_stitch_distance_mm", SATIN_SHORT_STITCH_MM)
+            try:
+                short_distance = float(
+                    (path.get("data-satin-short-stitch-mm") or "").strip()
+                    or SATIN_SHORT_STITCH_MM
+                )
+            except ValueError:
+                short_distance = float(SATIN_SHORT_STITCH_MM)
+            if not 0.0 <= short_distance <= 0.75:
+                short_distance = float(SATIN_SHORT_STITCH_MM)
+            # Short-stitch insets a stitch whose spacing to its neighbour on
+            # the same rail has fallen below this distance — it exists for the
+            # INSIDE of a curve. At or above the zigzag spacing it fires on
+            # every stitch instead, alternating the rails in and out: measured
+            # on BEACH BABY at 0.50 against 0.40 spacing, the satin rail turn
+            # p90 went 53 -> 157 degrees and the pitch tail 10 -> 41%.
+            # Keep it clear of the nominal spacing.
+            try:
+                spacing_value = float(zigzag_spacing)
+            except ValueError:
+                spacing_value = 0.0
+            if spacing_value > 0 and short_distance >= 0.6 * spacing_value:
+                short_distance = round(0.6 * spacing_value, 2)
+            _set_inkstitch(
+                path, "short_stitch_distance_mm", f"{short_distance:g}"
+            )
+            if short_distance > 0:
+                try:
+                    short_inset = float(
+                        (path.get("data-satin-short-stitch-inset") or "25").strip()
+                    )
+                except ValueError:
+                    short_inset = 25.0
+                if not 10.0 <= short_inset <= 50.0:
+                    short_inset = 25.0
+                _set_inkstitch(path, "short_stitch_inset", f"{short_inset:g}")
             # Center-walk + sparse zig-zag underlay is the lettering-grade combo
             # from Ink/Stitch's own fonts. It lies flat under a column ~1.3mm and
             # wider, but stacking two underlays plus the top pass inside a
@@ -395,8 +546,17 @@ def tune_svg(
             # Paris Review PES averages 1.23mm and Ink/Stitch's own satin fonts
             # overwhelmingly use 1.2 — where the Ink/Stitch default (~2mm) lets
             # the column ride loose on twill. Pin the repeats too (down-and-back).
-            _set_inkstitch(path, "center_walk_underlay_stitch_length_mm", "1.2")
-            _set_inkstitch(path, "center_walk_underlay_repeats", "2")
+            # Down-and-back at 1.2mm is the pro default and the shipped
+            # setting. On a design made of many short columns the second pass
+            # is ~16% of all stitches for very little hold, so it is opt-out
+            # per path rather than pinned.
+            _set_inkstitch(path, "center_walk_underlay_stitch_length_mm",
+                           (path.get("data-satin-underlay-length-mm") or "").strip()
+                           or "1.2")
+            cw_repeats = (path.get("data-satin-underlay-repeats") or "").strip() or "2"
+            if cw_repeats not in ("1", "2", "3"):
+                cw_repeats = "2"
+            _set_inkstitch(path, "center_walk_underlay_repeats", cw_repeats)
             # Contour underlay (edge run inset from both rails) is the wide-
             # column complement to the center walk — Ink/Stitch's recommended
             # combo for medium-wide satins. Opt-in via "center+contour"; the
@@ -407,7 +567,9 @@ def tune_svg(
                 _set_inkstitch(path, "contour_underlay_inset_mm", "0.4")
                 _set_inkstitch(path, "contour_underlay_stitch_length_mm", "1.5")
             _set_inkstitch(path, "zigzag_underlay", "true" if underlay == "center+zigzag" else "false")
-            _set_inkstitch(path, "zigzag_underlay_spacing_mm", "2.0")
+            _set_inkstitch(path, "zigzag_underlay_spacing_mm",
+                           (path.get("data-zigzag-underlay-mm") or "").strip()
+                           or zigzag_underlay_spacing)
             _set_inkstitch(path, "zigzag_underlay_max_stitch_length_mm", "5.0")
             _set_inkstitch(path, "zigzag_underlay_inset_mm", "0.0")
             _set_inkstitch(path, "running_stitch_tolerance_mm", RUNNING_TOLERANCE_MM)
@@ -430,23 +592,50 @@ def tune_svg(
                 _set_inkstitch(path, "pull_compensation_mm", pull_comp)
             else:
                 _set_inkstitch(path, "stroke_method", "running_stitch")
+                requested_length = (
+                    path.get("data-running-stitch-length-mm") or ""
+                ).strip()
+                preset_running = getattr(preset, "running_stitch_length_mm", None)
                 if path.get("data-smoothed") == "true":
-                    _set_inkstitch(path, "running_stitch_length_mm", SMOOTH_RUNNING_LENGTH_MM)
+                    default_length = (f"{preset_running:g}" if preset_running
+                                      else SMOOTH_RUNNING_LENGTH_MM)
                     _set_inkstitch(path, "running_stitch_tolerance_mm", SMOOTH_RUNNING_TOLERANCE_MM)
                 else:
-                    _set_inkstitch(path, "running_stitch_length_mm", max_stitch_len)
+                    default_length = f"{preset_running:g}" if preset_running else max_stitch_len
                     _set_inkstitch(path, "running_stitch_tolerance_mm", RUNNING_TOLERANCE_MM)
+                try:
+                    requested_length_value = float(requested_length)
+                except ValueError:
+                    running_length = default_length
+                else:
+                    # Below 0.8 mm the global micro-stitch cleanup starts
+                    # collapsing the requested points. Keep overrides within
+                    # a useful, machine-safe running-stitch range.
+                    running_length = (
+                        f"{requested_length_value:g}"
+                        if 0.8 <= requested_length_value <= 5.0
+                        else default_length
+                    )
+                _set_inkstitch(
+                    path, "running_stitch_length_mm", running_length
+                )
                 if method == "bean_stitch":
-                    # Per-path opt-in: data-bean-repeats dials the extra passes
-                    # (default 2 = triple). Small text on twill (e.g. a ~7mm
-                    # phone line) scatters under triple-pass because the passes
-                    # can't re-register in the same holes; drop to 1 (double) —
-                    # or use running_stitch (single) — to keep it crisp.
-                    repeats = (path.get("data-bean-repeats") or "2").strip()
+                    # Per-path opt-in: data-bean-repeats is Ink/Stitch
+                    # bean_stitch_repeats — 1 = TRIPLE (fwd/back/fwd), 2 =
+                    # quintuple, 3 = seven passes. The pro rail file is a
+                    # triple; the legacy default here is 2. The bean recipe
+                    # preset (hat-twill-bean) sets 1. Small text on twill
+                    # scatters under many passes because they can't re-register
+                    # in the same holes; use running_stitch (single) there.
+                    preset_repeats = str(getattr(preset, "bean_repeats", 2))
+                    repeats = (path.get("data-bean-repeats") or preset_repeats).strip()
                     if repeats not in ("1", "2", "3"):
-                        repeats = "2"
+                        repeats = preset_repeats
                     _set_inkstitch(path, "bean_stitch_repeats", repeats)
             _set_inkstitch(path, "trim_after", trim_after)
+
+    for fill_path, border_mm in fill_borders:
+        _add_fill_border(fill_path, border_mm, satin_spacing)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tree.write(

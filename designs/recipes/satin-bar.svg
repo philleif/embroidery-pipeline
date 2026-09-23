@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkstitch="http://inkstitch.org/namespace"
+     width="58mm" height="28mm" viewBox="0 0 58 28"
+     data-audit-profile="satin-lettering" data-require-explicit-rungs="true"
+     data-layout="center-out-cap" data-stitch-technique="satin-recipe">
+  <!-- Base SATIN recipe (docs/RECIPES.md). A satin column is ONE path: two rail
+       subpaths first, then rung subpaths that cross both rails (direction
+       guides; never on a cap end). Widths: 4 mm bar, 4 mm arc, 1.2 mm thin
+       stem with centre-walk-only underlay. Build:
+         stitch from-svg designs/recipes/satin-bar.svg (preset hat-twill-satin) -->
+  <g id="satin">
+    <path id="bar" inkstitch:satin_column="true" data-direction-rungs="3"
+          style="fill:none;stroke:#000000" d="M 4 4 L 4 24 M 8 4 L 8 24 M 3 9 L 9 9 M 3 14 L 9 14 M 3 19 L 9 19"/>
+    <path id="arc" inkstitch:satin_column="true" data-direction-rungs="3"
+          style="fill:none;stroke:#000000" d="M 16.84 17.21 L 17.40 15.90 L 18.08 14.65 L 18.89 13.48 L 19.82 12.39 L 20.85 11.41 L 21.97 10.53 L 23.18 9.78 L 24.45 9.14 L 25.79 8.65 L 27.17 8.29 L 28.58 8.07 L 30.00 8.00 L 31.42 8.07 L 32.83 8.29 L 34.21 8.65 L 35.55 9.14 L 36.82 9.78 L 38.03 10.53 L 39.15 11.41 L 40.18 12.39 L 41.11 13.48 L 41.92 14.65 L 42.60 15.90 L 43.16 17.21 M 20.60 18.58 L 21.00 17.64 L 21.49 16.75 L 22.07 15.91 L 22.73 15.14 L 23.46 14.43 L 24.26 13.81 L 25.13 13.27 L 26.04 12.82 L 26.99 12.46 L 27.98 12.21 L 28.98 12.05 L 30.00 12.00 L 31.02 12.05 L 32.02 12.21 L 33.01 12.46 L 33.96 12.82 L 34.87 13.27 L 35.74 13.81 L 36.54 14.43 L 37.27 15.14 L 37.93 15.91 L 38.51 16.75 L 39.00 17.64 L 39.40 18.58 M 24.84 14.63 L 21.40 9.71 M 30.00 13.00 L 30.00 7.00 M 35.16 14.63 L 38.60 9.71"/>
+    <path id="thin" inkstitch:satin_column="true" data-direction-rungs="3"
+          data-satin-underlay="center" style="fill:none;stroke:#000000" d="M 48 4 L 52 24 M 49.2 4 L 53.2 24 M 47 9 L 51 9 M 48 14 L 52 14 M 49 19 L 53 19"/>
+  </g>
+</svg>

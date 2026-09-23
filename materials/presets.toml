@@ -81,3 +81,49 @@ max_stitch_length_mm = 2.0       # short stitches keep spike tips and serif poin
 satin_underlay = "center-walk+zigzag"
 fill_underlay = "edge-walk"
 notes = "Red wordmark on a black structured twill cap — e.g. the ROCKTAVIA metal logo. Same digitization as hat-twill-black-detail; only the thread differs. WARNING: madeira-classic-40-1147-red carries a PLACEHOLDER code (1147) — color-match and replace the real Madeira red code before the final color-managed deploy."
+
+# ---------------------------------------------------------------------------
+# Base recipes, one per technique, all on the hat-twill front. Parameters come
+# from the professionally digitized corpus measured 2026-09 (docs/QUALITY-BAR.md,
+# docs/RECIPES.md). Start every new hat design from one of these three.
+
+[[preset]]
+name = "hat-twill-satin"
+fabric = "twill-hat-front"
+needle = "schmetz-embroidery-90-14"
+threads = ["madeira-classic-40-1023"]
+row_spacing_mm = 0.3              # only used if a fill sneaks into a satin design
+max_stitch_length_mm = 4.0
+satin_spacing_mm = 0.40           # pro corpus 0.36-0.40 on every satin file
+satin_max_stitch_mm = 5.0        # pro Acre sews 5 mm bold columns unsplit; a split column halves its reversal share
+satin_underlay = "center-walk+zigzag"
+zigzag_underlay_spacing_mm = 1.2 # pro Acre 3-5 mm columns; centre walk 1.2 mm is pinned in tuning
+fill_underlay = "edge-walk"
+notes = "Base SATIN recipe on hat twill: lettering, wordmarks, borders. Everything that is a stroke 1.0-5.0 mm wide is a satin column (pros satin even 5 mm bold letters; never fill them). Per path: data-satin-underlay=center on columns under ~1.3 mm, data-pull-comp-mm to override the 0.2 mm fabric comp on fine serifs."
+
+[[preset]]
+name = "hat-twill-fill"
+fabric = "twill-hat-front"
+needle = "schmetz-embroidery-90-14"
+threads = ["madeira-classic-40-1023"]
+row_spacing_mm = 0.2              # measured on both pro fills (Zenbul ring 0.20, CHGL napkin 0.21): thread length / covered area
+max_stitch_length_mm = 4.0       # pro tatami stitch is 4.0 mm flat, staggered
+fill_underlay_row_spacing_mm = 1.2   # pro underlay: one tatami pass at 90 deg to the top fill, 1.0 mm (Zenbul) / 1.6 mm (CHGL)
+fill_border_mm = 1.8             # pro edge treatment: satin run over the fill edge (1.8 mm Zenbul, 2.9 mm CHGL square)
+zigzag_underlay_spacing_mm = 1.2
+satin_underlay = "center-walk+zigzag"
+fill_underlay = "edge-walk"
+notes = "Base FILL recipe on hat twill, copied from the pro Zenbul ring and CHGL napkin: 0.2 mm tatami rows, 4 mm stitches, perpendicular tatami underlay, then a satin border over every fill edge. About 2x the thread of hat-twill-badge-fill; use it when the mass must read as solid cloth. Per path: data-fill-angle, data-fill-border-mm (0 opts out), data-stitch-method=contour_fill."
+
+[[preset]]
+name = "hat-twill-bean"
+fabric = "twill-hat-front"
+needle = "schmetz-embroidery-90-14"
+threads = ["madeira-classic-40-1023"]
+row_spacing_mm = 0.3
+max_stitch_length_mm = 2.0
+running_stitch_length_mm = 1.25  # pro HVGL "One": 1.2-1.45 mm on straights, Ink/Stitch takes the turns shorter
+bean_repeats = 1                 # Ink/Stitch bean_stitch_repeats=1 = TRIPLE (fwd/back/fwd), what the pro rail file is. 3 was 7 passes.
+satin_underlay = "center-walk+zigzag"
+fill_underlay = "edge-walk"
+notes = "Base BEAN (rail) recipe on hat twill, from the pro Hudson Valley 'One' file: a hand-drawn pen path (one open path per pen stroke, loops as loops), triple bean at 1.25 mm, dead-end branches reached by a running walk-back (data-stroke-method=running_stitch on a copy of the branch) instead of a float or a trim. Per path: data-stroke-method=bean_stitch, data-bean-repeats, data-smoothed=true + data-running-stitch-length-mm, data-trim-after=false + data-min-jump-mm on short hops."

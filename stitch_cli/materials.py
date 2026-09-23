@@ -7,6 +7,7 @@ parameters, so callers don't have to re-resolve cross-references.
 
 from __future__ import annotations
 
+import os
 import tomllib
 import math
 import re
@@ -15,6 +16,20 @@ from pathlib import Path
 
 
 MATERIALS_DIR = Path(__file__).resolve().parent.parent / "materials"
+
+
+def default_materials_dir() -> Path:
+    """Use an explicit inventory, a project inventory, or shipped defaults."""
+    override = os.environ.get("STITCH_MATERIALS_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    local = Path.cwd() / "materials"
+    if local.is_dir():
+        return local
+    if MATERIALS_DIR.is_dir():
+        return MATERIALS_DIR
+    return Path(__file__).resolve().parent / "data" / "materials"
+
 _HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 _SATIN_UNDERLAYS = {"none", "center-walk", "center-walk+zigzag", "center-walk+contour"}
 # Ink/Stitch exposes fill underlay as a sparse fill grid, not independent
@@ -68,6 +83,24 @@ class ResolvedPreset:
     # Nominal zig-zag spacing. Wide traced columns may request 0.38mm locally
     # because Ink/Stitch's measured same-rail pitch grows on broad curves.
     satin_spacing_mm: float = 0.40
+    # Fill underlay row pitch. Legacy presets derive it as 3x the fill row
+    # spacing; the pro fills (Zenbul ring, CHGL napkin, 2026-09) run a
+    # perpendicular tatami underlay at 1.0-1.6 mm regardless of top density.
+    fill_underlay_row_spacing_mm: float | None = None
+    # Zig-zag underlay pitch along a satin column. Ink/Stitch default is 3.0,
+    # our legacy 2.0; the pro Acre wordmark (3-5 mm columns) uses ~1.2.
+    zigzag_underlay_spacing_mm: float = 2.0
+    # Satin border sewn over every fill edge after the fill (0 = none). The
+    # pro fills hide the tatami edge under a 1.8 mm (Zenbul) / 2.9 mm (CHGL)
+    # satin run with its own centre walk.
+    fill_border_mm: float = 0.0
+    # Running/bean defaults for the bean recipe. None / 2 keep the legacy
+    # tuning behaviour (SMOOTH_RUNNING_LENGTH_MM, quintuple bean).
+    running_stitch_length_mm: float | None = None
+    bean_repeats: int = 2
+    # Longest unsplit satin zig-zag (Ink/Stitch max_stitch_length on the
+    # column). Legacy 4.0; pro Acre sews 5 mm columns whole.
+    satin_max_stitch_mm: float = 4.0
     notes: str = ""
 
 
@@ -90,6 +123,17 @@ def _index_records(records: list[dict], field: str, kind: str) -> dict[str, dict
     return indexed
 
 
+def _bean_repeats(value: object, name: str) -> int:
+    """Ink/Stitch bean_stitch_repeats: 1 = triple, 2 = quintuple, 3 = 7 passes."""
+    try:
+        repeats = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"preset {name!r} bean_repeats must be 1, 2 or 3; got {value!r}")
+    if repeats not in (1, 2, 3):
+        raise ValueError(f"preset {name!r} bean_repeats must be 1, 2 or 3; got {value!r}")
+    return repeats
+
+
 def _positive(value: object, label: str, *, allow_zero: bool = False) -> float:
     try:
         number = float(value)
@@ -101,7 +145,8 @@ def _positive(value: object, label: str, *, allow_zero: bool = False) -> float:
     return number
 
 
-def load_threads(materials_dir: Path = MATERIALS_DIR) -> dict[str, Thread]:
+def load_threads(materials_dir: Path | None = None) -> dict[str, Thread]:
+    materials_dir = materials_dir if materials_dir is not None else default_materials_dir()
     rows = _index_records(
         _load_table(materials_dir / "threads.toml", "thread"), "id", "thread"
     )
@@ -117,7 +162,8 @@ def load_threads(materials_dir: Path = MATERIALS_DIR) -> dict[str, Thread]:
     return result
 
 
-def load_needles(materials_dir: Path = MATERIALS_DIR) -> dict[str, Needle]:
+def load_needles(materials_dir: Path | None = None) -> dict[str, Needle]:
+    materials_dir = materials_dir if materials_dir is not None else default_materials_dir()
     rows = _index_records(
         _load_table(materials_dir / "needles.toml", "needle"), "id", "needle"
     )
@@ -128,7 +174,8 @@ def load_needles(materials_dir: Path = MATERIALS_DIR) -> dict[str, Needle]:
     return result
 
 
-def load_fabrics(materials_dir: Path = MATERIALS_DIR) -> dict[str, Fabric]:
+def load_fabrics(materials_dir: Path | None = None) -> dict[str, Fabric]:
+    materials_dir = materials_dir if materials_dir is not None else default_materials_dir()
     rows = _index_records(
         _load_table(materials_dir / "fabrics.toml", "fabric"), "id", "fabric"
     )
@@ -139,11 +186,13 @@ def load_fabrics(materials_dir: Path = MATERIALS_DIR) -> dict[str, Fabric]:
     return result
 
 
-def load_presets_raw(materials_dir: Path = MATERIALS_DIR) -> list[dict]:
+def load_presets_raw(materials_dir: Path | None = None) -> list[dict]:
+    materials_dir = materials_dir if materials_dir is not None else default_materials_dir()
     return _load_table(materials_dir / "presets.toml", "preset")
 
 
-def resolve_preset(name: str, materials_dir: Path = MATERIALS_DIR) -> ResolvedPreset:
+def resolve_preset(name: str, materials_dir: Path | None = None) -> ResolvedPreset:
+    materials_dir = materials_dir if materials_dir is not None else default_materials_dir()
     threads_by_id = load_threads(materials_dir)
     needles_by_id = load_needles(materials_dir)
     fabrics_by_id = load_fabrics(materials_dir)
@@ -201,9 +250,29 @@ def resolve_preset(name: str, materials_dir: Path = MATERIALS_DIR) -> ResolvedPr
         satin_spacing_mm=_positive(
             raw.get("satin_spacing_mm", 0.40), f"preset {name!r} satin_spacing_mm"
         ),
+        fill_underlay_row_spacing_mm=(
+            None if raw.get("fill_underlay_row_spacing_mm") is None else _positive(
+                raw.get("fill_underlay_row_spacing_mm"),
+                f"preset {name!r} fill_underlay_row_spacing_mm")
+        ),
+        zigzag_underlay_spacing_mm=_positive(
+            raw.get("zigzag_underlay_spacing_mm", 2.0),
+            f"preset {name!r} zigzag_underlay_spacing_mm"),
+        fill_border_mm=_positive(
+            raw.get("fill_border_mm", 0.0), f"preset {name!r} fill_border_mm",
+            allow_zero=True),
+        running_stitch_length_mm=(
+            None if raw.get("running_stitch_length_mm") is None else _positive(
+                raw.get("running_stitch_length_mm"),
+                f"preset {name!r} running_stitch_length_mm")
+        ),
+        bean_repeats=_bean_repeats(raw.get("bean_repeats", 2), name),
+        satin_max_stitch_mm=_positive(
+            raw.get("satin_max_stitch_mm", 4.0), f"preset {name!r} satin_max_stitch_mm"),
         notes=raw.get("notes", ""),
     )
 
 
-def list_preset_names(materials_dir: Path = MATERIALS_DIR) -> list[str]:
+def list_preset_names(materials_dir: Path | None = None) -> list[str]:
+    materials_dir = materials_dir if materials_dir is not None else default_materials_dir()
     return list(_index_records(load_presets_raw(materials_dir), "name", "preset"))

@@ -16,13 +16,20 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
+from lxml import etree
+
+from . import artifacts
+from . import compiled
 from . import convert as convert_mod
 from . import deploy as deploy_mod
 from . import inkstitch
+from . import preflight
 from . import processing
 from . import tuning
+from . import visualqa
 from .materials import (
     list_preset_names,
     load_presets_raw,
@@ -74,6 +81,7 @@ def _digitize(
     preset,
     *,
     strict_audit: bool = True,
+    reference_image: Path | None = None,
 ) -> int:
     """Shared pipeline: source SVG → tuned SVG → PES (normalized) → summary.
 
@@ -84,55 +92,143 @@ def _digitize(
     re-tuned so the new columns pick up the preset's satin parameters.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    tuned_svg = out_dir / f"{name}.tuned.svg"
-    pes = out_dir / f"{name}.pes"
     audit_profile = tuning.audit_profile_for_svg(source)
 
     def _rel(p: Path) -> str:
         return str(p.relative_to(Path.cwd()) if p.is_relative_to(Path.cwd()) else p)
 
-    # Outline-mode designs (trace_lib --satin-mode outline) carry glyph groups
-    # of branch fills + rungs. Convert those into routed satin columns with
-    # Ink/Stitch's fill_to_satin + auto_satin BEFORE tuning, so the plain
-    # fills never reach the fill parameter branch.
-    outline_groups = tuning.collect_outline_groups(source)
-    if outline_groups:
-        from . import fillsatin
-        print(f"outline mode: converting {len(outline_groups)} glyph group(s) "
-              f"(fill_to_satin + auto_satin)")
-        fts_svg = out_dir / f"{name}.fts.svg"
-        fillsatin.convert_outline_svg(source, fts_svg)
-        source = fts_svg
+    # Structural checks run on the human-editable source, before conversion can
+    # silently reinterpret ambiguous rails/rungs or stale connector endpoints.
+    preflight_report = preflight.validate_svg(source)
+    for line in preflight.format_report(preflight_report):
+        print(line)
+    if preflight_report.errors:
+        print("preflight failed; previous published artifact bundle is unchanged",
+              file=sys.stderr)
+        return 1
 
-    print(f"tuning {source.name} for preset {preset.name!r}")
-    tuning.tune_svg(source, tuned_svg, preset)
-    print(f"  → {_rel(tuned_svg)}")
+    # Resolve optional visual reference before source is replaced by an outline
+    # or stroke-to-satin intermediate in the staging directory.
+    source_tree = etree.parse(str(source))
+    source_root = source_tree.getroot()
+    if reference_image is None:
+        declared_reference = (source_root.get("data-reference-image") or "").strip()
+        if declared_reference:
+            reference_image = (source.parent / declared_reference).resolve()
+    rotation_deg = float(source_root.get("data-jig-rotation-deg") or 0.0)
 
-    to_stitch = tuned_svg
-    satin_ids = tuning.collect_satin_stroke_ids(tuned_svg)
-    if satin_ids:
-        print(f"converting {len(satin_ids)} stroked path(s) → satin columns (stroke_to_satin)")
-        satin_svg = out_dir / f"{name}.satin.svg"
-        inkstitch.run_effect("stroke_to_satin", tuned_svg, satin_svg, ids=satin_ids)
-        retuned_svg = out_dir / f"{name}.tuned2.svg"
-        tuning.tune_svg(satin_svg, retuned_svg, preset)
-        to_stitch = retuned_svg
-        print(f"  → {_rel(satin_svg)}  →  {_rel(retuned_svg)}")
+    # Every generated file lives in a unique stage. The manifest is promoted
+    # last as the bundle commit marker; a conversion/audit failure leaves the
+    # previous known-good PES/DST/previews untouched.
+    with tempfile.TemporaryDirectory(prefix=f".build-{name}-", dir=out_dir) as td:
+        stage = Path(td)
+        tuned_svg = stage / f"{name}.tuned.svg"
+        pes = stage / f"{name}.pes"
+        working_source = source
 
-    print("running Ink/Stitch")
-    inkstitch.svg_to_pes(to_stitch, pes)
-    print(f"  → {pes}")
+        # Outline-mode designs (trace_lib --satin-mode outline) carry glyph
+        # groups of branch fills + rungs. Convert before tuning.
+        outline_groups = tuning.collect_outline_groups(working_source)
+        if outline_groups:
+            from . import fillsatin
+            print(f"outline mode: converting {len(outline_groups)} glyph group(s) "
+                  f"(fill_to_satin + auto_satin)")
+            fts_svg = stage / f"{name}.fts.svg"
+            fillsatin.convert_outline_svg(working_source, fts_svg)
+            working_source = fts_svg
 
-    print("normalizing PES metadata")
-    convert_mod.normalize_pes(pes, preset=preset)
-    _print_pes_stats(pes)
+        print(f"tuning {working_source.name} for preset {preset.name!r}")
+        tuning.tune_svg(working_source, tuned_svg, preset)
+        print(f"  → {_rel(tuned_svg)}")
 
-    # Score every build against the pro-digitized bands. Quality regressions are
-    # invisible in a preview and expensive on a blank, so make them loud here.
-    from . import audit as audit_mod
-    print(f"quality audit{f' ({audit_profile})' if audit_profile else ''}")
-    _, failures = audit_mod.audit(pes, profile=audit_profile)
-    return 1 if strict_audit and failures else 0
+        to_stitch = tuned_svg
+        satin_ids = tuning.collect_satin_stroke_ids(tuned_svg)
+        if satin_ids:
+            print(f"converting {len(satin_ids)} stroked path(s) → satin columns "
+                  "(stroke_to_satin)")
+            satin_svg = stage / f"{name}.satin.svg"
+            inkstitch.run_effect("stroke_to_satin", tuned_svg, satin_svg, ids=satin_ids)
+            retuned_svg = stage / f"{name}.tuned2.svg"
+            tuning.tune_svg(satin_svg, retuned_svg, preset)
+            to_stitch = retuned_svg
+            print(f"  → {_rel(satin_svg)}  →  {_rel(retuned_svg)}")
+
+        compiled_results = compiled.validate_compiled_objects(to_stitch, stage)
+        for line in compiled.format_results(compiled_results):
+            print(line)
+        compiled_failures = [
+            failure
+            for result in compiled_results
+            for failure in result.failures
+        ]
+        if compiled_failures:
+            print("compiled-object QA failed; previous published artifact bundle "
+                  "is unchanged", file=sys.stderr)
+            return 1
+
+        print("running Ink/Stitch")
+        inkstitch.svg_to_pes(to_stitch, pes)
+        print(f"  → {_rel(pes)}")
+
+        print("normalizing PES metadata")
+        convert_mod.normalize_pes(pes, preset=preset)
+        _print_pes_stats(pes)
+
+        # Score every staged build before publishing it. A strict failure does
+        # not overwrite the last bundle that passed.
+        from . import audit as audit_mod
+        print(f"quality audit{f' ({audit_profile})' if audit_profile else ''}")
+        metrics, failures = audit_mod.audit(pes, profile=audit_profile)
+
+        bundle_artifacts = artifacts.write_machine_derivatives(pes, stage, name)
+        if to_stitch != tuned_svg:
+            artifacts.copy_final_tuned_svg(to_stitch, tuned_svg)
+        bundle_artifacts["tuned_svg"] = tuned_svg
+
+        visual_report = None
+        if reference_image is not None:
+            if not reference_image.exists():
+                print(f"visual QA reference does not exist: {reference_image}",
+                      file=sys.stderr)
+                return 1
+            qa_png = stage / f"{name}.qa.png"
+            visual_report = visualqa.make_visual_qa(
+                reference_image, bundle_artifacts["preview_png"], qa_png,
+                svg_rotation_deg=rotation_deg,
+            )
+            bundle_artifacts["visual_qa"] = qa_png
+            print(f"visual QA: {visual_report['silhouette_mismatch_pct']:.2f}% "
+                  "normalized silhouette difference (advisory)")
+            print(f"  → {_rel(qa_png)}")
+
+        manifest = stage / f"{name}.manifest.json"
+        artifacts.write_manifest(
+            manifest,
+            source=source,
+            preset_name=preset.name,
+            audit_profile=audit_profile,
+            metrics=metrics,
+            audit_failures=failures,
+            preflight=preflight_report.to_dict(),
+            compiled_objects=[result.to_dict() for result in compiled_results],
+            artifacts=bundle_artifacts,
+            visual_qa=visual_report,
+        )
+        bundle_artifacts["manifest"] = manifest
+
+        if strict_audit and failures:
+            print("strict audit failed; previous published artifact bundle is "
+                  "unchanged", file=sys.stderr)
+            return 1
+
+        names_to_promote = [path.name for path in bundle_artifacts.values()]
+        artifacts.promote_bundle(
+            stage, out_dir, names_to_promote, manifest_name=manifest.name
+        )
+        print("published atomic artifact bundle")
+        for key, path in bundle_artifacts.items():
+            print(f"  {key:12s} → {_rel(out_dir / path.name)}")
+    return 0
 
 
 def cmd_from_svg(args: argparse.Namespace) -> int:
@@ -143,6 +239,8 @@ def cmd_from_svg(args: argparse.Namespace) -> int:
     return _digitize(
         source, out_dir, name, preset,
         strict_audit=getattr(args, "strict_audit", False),
+        reference_image=(Path(args.reference_image).resolve()
+                         if getattr(args, "reference_image", None) else None),
     )
 
 
@@ -435,6 +533,31 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Verify every file recorded by an atomic build manifest."""
+    supplied = Path(args.input).resolve()
+    manifest = (
+        supplied if supplied.name.endswith(".manifest.json")
+        else artifacts.manifest_for_artifact(supplied)
+    )
+    if not manifest.exists():
+        print(f"bundle manifest not found: {manifest}", file=sys.stderr)
+        return 1
+    payload, failures = artifacts.verify_manifest(manifest)
+    print(f"bundle: {manifest}")
+    print(f"  source: {payload.get('source', {}).get('path', '(unknown)')}")
+    print(f"  preset: {payload.get('preset', '(unknown)')}")
+    print(f"  audit passed: {payload.get('audit', {}).get('passed', False)}")
+    for key, entry in payload.get("artifacts", {}).items():
+        print(f"  {key:12s} {entry['file']}  {entry['sha256'][:12]}…")
+    if failures:
+        for failure in failures:
+            print(f"  [FAIL] {failure}", file=sys.stderr)
+        return 1
+    print("  => PASS: every artifact matches the manifest")
+    return 0
+
+
 def cmd_preview(args: argparse.Namespace) -> int:
     """Render a stitch-plan preview directly from an embroidery file.
 
@@ -479,15 +602,70 @@ def _add_strict_audit_switch(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    from .workspace import initialize
+    for path in initialize(Path(args.directory).expanduser().resolve()):
+        print(path)
+    return 0
+
+
+def cmd_trace(args: argparse.Namespace) -> int:
+    try:
+        from .tracing import TraceConfig, WordmarkTracer
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Tracing dependencies are missing. Install embroidery-pipeline[trace] "
+            "from your release wheel, or run `uv sync --extra trace` in the checkout."
+        ) from exc
+    config = TraceConfig(
+        target_w_mm=args.width_mm, work_w=args.work_width,
+        satin_mode=args.satin_mode, audit_profile=args.profile,
+    )
+    tracer = WordmarkTracer(str(Path(args.input).resolve()), config).trace()
+    output = Path(args.output).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tracer.write_svg(str(output))
+    tracer.coverage_report()
+    for value, render in ((args.debug_png, tracer.write_debug_png),
+                          (args.finish_png, tracer.write_finish_png)):
+        if value:
+            path = Path(value).resolve()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            render(str(path))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="stitch", description=__doc__.split("\n", 1)[0])
+    from . import __version__
+    parser.add_argument("--version", action="version", version=f"stitch {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_init = sub.add_parser("init", help="copy editable materials and starter SVGs to a directory")
+    p_init.add_argument("directory", nargs="?", default=".")
+    p_init.set_defaults(func=cmd_init)
+
+    p_trace = sub.add_parser("trace", help="trace dark raster wordmarks into satin/bean SVGs")
+    p_trace.add_argument("input")
+    p_trace.add_argument("-o", "--output", required=True, help="destination SVG")
+    p_trace.add_argument("--width-mm", type=float, required=True, help="target ink width in mm")
+    p_trace.add_argument("--work-width", type=int, default=4000, help="working raster width in pixels")
+    p_trace.add_argument("--satin-mode", choices=["skeleton", "outline"], default="skeleton")
+    p_trace.add_argument("--profile", choices=["satin-wordmark", "satin-outline", "mixed"],
+                         default="satin-wordmark")
+    p_trace.add_argument("--debug-png")
+    p_trace.add_argument("--finish-png")
+    p_trace.set_defaults(func=cmd_trace)
 
     p_svg = sub.add_parser("from-svg", help="SVG → tuned SVG → .pes via Ink/Stitch")
     p_svg.add_argument("input")
     p_svg.add_argument("--preset", required=True, choices=list_preset_names())
     p_svg.add_argument("-o", "--out", help="output directory (default: ./out)")
     p_svg.add_argument("--name", help="output basename (default: input stem)")
+    p_svg.add_argument(
+        "--reference-image",
+        help="optional source artwork for normalized visual-QA comparison",
+    )
     _add_strict_audit_switch(p_svg)
     p_svg.set_defaults(func=cmd_from_svg)
 
@@ -660,13 +838,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_prev.add_argument("--open", action="store_true", help="open the SVG preview after writing")
     p_prev.set_defaults(func=cmd_preview)
 
+    p_verify = sub.add_parser(
+        "verify", help="verify an atomic build manifest and every recorded artifact"
+    )
+    p_verify.add_argument(
+        "input", help="bundle .manifest.json or any artifact from that bundle"
+    )
+    p_verify.set_defaults(func=cmd_verify)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        parser = build_parser()
+        args = parser.parse_args(argv)
+        return args.func(args)
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        print(f"stitch: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

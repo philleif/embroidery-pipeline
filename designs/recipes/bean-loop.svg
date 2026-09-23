@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="22mm" viewBox="0 0 40 22"
+     data-audit-profile="running" data-layout="center-out-cap" data-stitch-technique="bean-recipe">
+  <!-- Base BEAN (rail) recipe (docs/RECIPES.md). One open path per pen stroke,
+       in writing order, loops drawn as loops. A dead-end branch is beaned out,
+       then walked back with a plain running stitch on a copy of the branch, so
+       the pen continues without a float or a trim. Hops under 3 mm carry
+       data-trim-after="false". Build:
+         stitch from-svg designs/recipes/bean-loop.svg (preset hat-twill-bean) -->
+  <g id="pen">
+    <path id="loops" style="fill:none;stroke:#000000;stroke-width:0.9;stroke-linecap:round"
+          data-stroke-method="bean_stitch" data-smoothed="true"
+          data-trim-after="false" data-min-jump-mm="13" d="M 4.00 18.00 C 4.50 17.33 5.83 15.67 7.00 14.00 C 8.17 12.33 9.83 9.75 11.00 8.00 C 12.17 6.25 13.58 4.08 14.00 3.50 C 14.42 2.92 13.92 3.58 13.50 4.50 C 13.08 5.42 12.08 7.50 11.50 9.00 C 10.92 10.50 10.25 12.33 10.00 13.50 C 9.75 14.67 9.83 15.33 10.00 16.00 C 10.17 16.67 10.42 17.33 11.00 17.50 C 11.58 17.67 12.50 17.58 13.50 17.00 C 14.50 16.42 15.75 15.33 17.00 14.00 C 18.25 12.67 19.83 10.67 21.00 9.00 C 22.17 7.33 23.58 4.67 24.00 4.00 C 24.42 3.33 23.92 4.08 23.50 5.00 C 23.08 5.92 22.08 8.00 21.50 9.50 C 20.92 11.00 20.25 12.83 20.00 14.00 C 19.75 15.17 19.75 15.87 20.00 16.50 C 20.25 17.13 20.75 17.80 21.50 17.80 C 22.25 17.80 23.42 17.30 24.50 16.50 C 25.58 15.70 27.42 13.58 28.00 13.00"/>
+    <path id="branch" style="fill:none;stroke:#000000;stroke-width:0.9;stroke-linecap:round"
+          data-stroke-method="bean_stitch" data-smoothed="true"
+          data-trim-after="false" data-min-jump-mm="13" d="M 28.00 13.00 C 28.42 12.33 29.67 10.50 30.50 9.00 C 31.33 7.50 32.58 4.83 33.00 4.00"/>
+    <path id="branch-walk-back" style="fill:none;stroke:#000000;stroke-width:0.9;stroke-linecap:round"
+          data-stroke-method="running_stitch" data-smoothed="true"
+          data-trim-after="false" data-min-jump-mm="13" d="M 33.00 4.00 C 32.58 4.83 31.33 7.50 30.50 9.00 C 29.67 10.50 28.42 12.33 28.00 13.00"/>
+    <path id="exit" style="fill:none;stroke:#000000;stroke-width:0.9;stroke-linecap:round"
+          data-stroke-method="bean_stitch" data-smoothed="true" d="M 28.00 13.00 C 28.33 13.42 29.17 14.83 30.00 15.50 C 30.83 16.17 31.83 17.08 33.00 17.00 C 34.17 16.92 36.33 15.33 37.00 15.00"/>
+  </g>
+</svg>

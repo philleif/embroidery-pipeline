@@ -1,0 +1,39 @@
+name: Package checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.11', '3.14']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.3'
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked --extra trace
+      - run: uv run --extra trace python -m unittest discover -s tests -q
+      - run: uv build
+      - name: Verify installed wheel outside the checkout
+        shell: bash
+        run: |
+          uv venv "$RUNNER_TEMP/stitch-smoke"
+          if [ "$RUNNER_OS" = Windows ]; then
+            python_bin="$RUNNER_TEMP/stitch-smoke/Scripts/python.exe"
+          else
+            python_bin="$RUNNER_TEMP/stitch-smoke/bin/python"
+          fi
+          wheels=(dist/*.whl)
+          uv pip install --python "$python_bin" "${wheels[0]}[trace]"
+          cp tests/test_distribution.py "$RUNNER_TEMP/test_distribution.py"
+          cd "$RUNNER_TEMP"
+          "$python_bin" -m stitch_cli --version
+          "$python_bin" test_distribution.py -q
